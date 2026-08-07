@@ -1,0 +1,9 @@
+__pycache__/
+.pytest_cache/
+.vscode/
+build/
+dist/
+*.spec
+expenses.db
+expenses.json
+Color problem.png
