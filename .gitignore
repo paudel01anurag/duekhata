@@ -1,9 +1,26 @@
+# Python
 __pycache__/
 .pytest_cache/
+
+# Editor
 .vscode/
+
+# Build output. Executables are published as GitHub release assets rather than
+# committed, so the repository does not grow by ~24 MB on every build.
 build/
 dist/
 *.spec
+
+# Personal data. expenses.db holds real financial records and the local account
+# credentials, so it must never be committed.
 expenses.db
 expenses.json
+
+# Scratch files kept out of the history
 Color problem.png
+main_error.txt
+python_test.py
+tkinter_test.py
+
+# Manual source snapshots, superseded by git tags
+versions/

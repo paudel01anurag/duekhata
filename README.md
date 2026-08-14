@@ -4,7 +4,10 @@ A desktop application for tracking recurring subscriptions and other monthly pay
 
 ## Features
 
-- Add fixed or variable monthly payments
+- Protect the application behind a local username and password
+- Add fixed or variable payments that repeat weekly, monthly, quarterly, yearly, or not at all
+- Edit an existing subscription without losing its paid history
+- Record a cancellation date so a finished subscription stops billing
 - Record a description, amount, date, account, category, and color
 - Display subscriptions in a responsive monthly calendar
 - View projected and remaining expenses for the selected month
@@ -36,6 +39,40 @@ From the project directory:
 ```bash
 python main.py
 ```
+
+## How repetition works
+
+Every subscription has a **start date**, a **repeat cadence**, and an optional **end date**.
+
+- The start date is the first day it bills. A subscription never appears in a month before it
+  started, so historical months show what you were actually paying at the time.
+- The cadence is one of one-off, weekly, monthly, every three months, or yearly. Monthly, quarterly
+  and yearly entries bill on the same day of the month as the start date; if that day does not exist
+  in a shorter month, the charge falls on the last day instead, so a payment due on the 31st bills
+  on 28 February.
+- The end date is the last day it can bill, and is left empty while a subscription is still active.
+  Set it when you cancel something, and past months keep showing it correctly.
+
+A monthly total counts every billing day in that month, so a weekly subscription is counted four or
+five times rather than once.
+
+Use `Edit` in the selected-day panel to change any of this. Editing keeps the subscription's
+identity, so the months you already marked as paid are preserved — deleting and re-adding would
+lose them.
+
+## Account login
+
+The first launch asks you to create a local account. The password must contain at least eight
+characters, one capital letter, one lower-case letter, one number, and one symbol. Every later
+launch asks for that username and password before the tracker opens.
+
+Passwords are never stored directly. They are hashed with PBKDF2-HMAC-SHA256 using 200,000
+iterations and a random per-account salt, and the stored hash is compared in constant time.
+
+This login is a convenience gate rather than a security boundary. The subscription data itself is
+stored in an unencrypted SQLite database that any database tool can open, and the `Recover account`
+button on the login screen clears the saved credentials so a new account can be created without
+proving who you are. Do not rely on it to protect sensitive information on a shared computer.
 
 ## Data storage
 

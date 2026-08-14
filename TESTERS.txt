@@ -1,0 +1,106 @@
+SUBSCRIPTION TRACKER - NOTES FOR TESTERS
+========================================
+
+Thank you for trying this out. Please read this first, because Windows will
+almost certainly warn you about the file, and that warning is expected.
+
+
+WHY WINDOWS WARNS YOU
+---------------------
+This application is not code-signed. Buying a signing certificate costs a few
+hundred dollars a year, which is hard to justify for a hobby project shared
+with a handful of people.
+
+When you download anything from the internet, Windows tags the file as having
+come from outside your computer. Microsoft Defender SmartScreen then checks
+that tag and looks the file up in Microsoft's reputation database. This
+application is new and has been downloaded by very few people, so it has no
+reputation yet, and SmartScreen shows:
+
+    "Windows protected your PC"
+    "Microsoft Defender SmartScreen prevented an unrecognised app from starting."
+
+That message means "I have not seen this file before", not "this file is
+harmful". Every new unsigned program gets it, and the warning fades away only
+once many people have downloaded the same file.
+
+You should still only run this because you know and trust the person who sent
+it to you. That is genuinely the only assurance you have here.
+
+
+HOW TO RUN IT
+-------------
+The smoothest order is to unblock the ZIP *before* you extract it, because
+Windows copies the "from the internet" tag onto everything you pull out of it.
+
+  1. Download the ZIP file.
+  2. Right-click the ZIP, choose Properties.
+  3. At the bottom of the General tab, tick "Unblock", then click OK.
+     (If there is no "Unblock" box, there is nothing to do - carry on.)
+  4. Extract the ZIP to a normal folder, for example your Desktop or Documents.
+  5. Double-click "Subscription Tracker.exe".
+
+If you skipped step 3 and see the blue SmartScreen box, you can still continue:
+click "More info", then "Run anyway".
+
+Do not run it directly from inside the ZIP viewer. Extract it first, or the
+application may not be able to create its database.
+
+
+IF YOUR ANTIVIRUS QUARANTINES IT
+--------------------------------
+This program is built with a tool called PyInstaller, which bundles Python and
+the application into a single executable. Some antivirus engines flag anything
+built that way, because the same bundling technique is sometimes used by real
+malware. It is a false positive, but you are entitled to be sceptical.
+
+If you would rather verify than trust, upload the file to virustotal.com. You
+will typically see a small number of engines flagging it and the large majority
+saying it is clean, which is the normal signature of a PyInstaller false alarm.
+
+If you are not comfortable, please just say so - it is a completely reasonable
+position, and running it from source (below) avoids the problem entirely.
+
+
+WHERE YOUR DATA IS STORED
+-------------------------
+The application creates its own empty database the first time you run it:
+
+    %LOCALAPPDATA%\SubscriptionTracker\expenses.db
+
+Paste that path into the File Explorer address bar to find it. Nothing is sent
+anywhere - there is no network connection of any kind. No data from anybody
+else's copy is included in this download; you start completely empty.
+
+The first screen asks you to create a local username and password. Please do
+NOT reuse a real password. That login keeps the window closed to a casual
+passer-by, but the database itself is not encrypted, so treat it as a latch
+rather than a lock, and avoid putting genuinely sensitive information in.
+
+
+TO REMOVE IT COMPLETELY
+-----------------------
+  1. Delete "Subscription Tracker.exe".
+  2. Delete the folder %LOCALAPPDATA%\SubscriptionTracker
+
+There is no installer and nothing is written to the registry.
+
+
+RUNNING FROM SOURCE INSTEAD
+---------------------------
+If you would prefer to read the code rather than trust an executable:
+
+    python -m pip install tkcalendar
+    python main.py
+
+It needs Python 3.10 or newer.
+
+
+WHAT WOULD BE MOST USEFUL TO REPORT
+-----------------------------------
+  - Anything that crashes, or any error message you see.
+  - Subscriptions that bill on a schedule the app cannot express.
+  - Totals that look wrong, especially for yearly or weekly items.
+  - Anything you expected to be able to do but could not find.
+  - Anything that looked confusing or ugly on your screen, particularly if you
+    use display scaling or a smaller monitor.

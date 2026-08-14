@@ -6,9 +6,35 @@ import sqlite3
 import textwrap
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Iterator, List, Optional, Set
+
+
+CADENCE_ONCE = "once"
+CADENCE_WEEKLY = "weekly"
+CADENCE_MONTHLY = "monthly"
+CADENCE_QUARTERLY = "quarterly"
+CADENCE_YEARLY = "yearly"
+
+# Ordered for presentation in the user interface.
+CADENCES = (
+    CADENCE_ONCE,
+    CADENCE_WEEKLY,
+    CADENCE_MONTHLY,
+    CADENCE_QUARTERLY,
+    CADENCE_YEARLY,
+)
+
+CADENCE_LABELS = {
+    CADENCE_ONCE: "One-off",
+    CADENCE_WEEKLY: "Every week",
+    CADENCE_MONTHLY: "Every month",
+    CADENCE_QUARTERLY: "Every 3 months",
+    CADENCE_YEARLY: "Every year",
+}
+
+LABELS_TO_CADENCE = {label: cadence for cadence, label in CADENCE_LABELS.items()}
 
 
 @dataclass
@@ -23,6 +49,21 @@ class Expense:
     due_day: Optional[int] = None
     expense_type: str = "Fixed"
     color: str = "#f4a261"
+    # How often the subscription bills. `date` is the first billing date and
+    # `ends_on` the last one, inclusive; None means it has not been cancelled.
+    cadence: str = ""
+    ends_on: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        # `cadence` supersedes the older `recurring_monthly` flag. Normalising
+        # here keeps the two consistent no matter how the record was built:
+        # from the database, from legacy JSON, or directly in a test.
+        cadence = (self.cadence or "").strip().lower()
+        if cadence not in CADENCES:
+            cadence = CADENCE_MONTHLY if self.recurring_monthly else CADENCE_ONCE
+        self.cadence = cadence
+        self.recurring_monthly = cadence != CADENCE_ONCE
+        self.ends_on = (self.ends_on or "").strip() or None
 
 
 def _json_fallback_path(data_file: Path) -> Path:
@@ -43,6 +84,30 @@ def _connect(data_file: Path) -> Iterator[sqlite3.Connection]:
         connection.close()
 
 
+def _migrate_expense_columns(connection: sqlite3.Connection) -> None:
+    """Add the cadence and end-date columns to databases created before them.
+
+    Existing rows only carried the boolean `recurring_monthly`, so their cadence
+    is back-filled from it rather than taking the column default. Anything that
+    was recurring becomes monthly; everything else becomes a one-off.
+    """
+    existing = {row[1] for row in connection.execute("PRAGMA table_info(expenses)").fetchall()}
+
+    if "cadence" not in existing:
+        connection.execute("ALTER TABLE expenses ADD COLUMN cadence TEXT")
+    if "ends_on" not in existing:
+        connection.execute("ALTER TABLE expenses ADD COLUMN ends_on TEXT")
+
+    connection.execute(
+        """
+        UPDATE expenses
+        SET cadence = CASE WHEN recurring_monthly = 1 THEN ? ELSE ? END
+        WHERE cadence IS NULL OR TRIM(cadence) = ''
+        """,
+        (CADENCE_MONTHLY, CADENCE_ONCE),
+    )
+
+
 def create_schema(data_file: Path) -> None:
     data_file.parent.mkdir(parents=True, exist_ok=True)
     with _connect(data_file) as connection:
@@ -58,10 +123,13 @@ def create_schema(data_file: Path) -> None:
                 recurring_monthly INTEGER NOT NULL DEFAULT 0,
                 due_day INTEGER,
                 expense_type TEXT NOT NULL DEFAULT 'Fixed',
-                color TEXT NOT NULL DEFAULT '#f4a261'
+                color TEXT NOT NULL DEFAULT '#f4a261',
+                cadence TEXT,
+                ends_on TEXT
             )
             """
         )
+        _migrate_expense_columns(connection)
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS expense_payments (
@@ -82,6 +150,70 @@ def create_schema(data_file: Path) -> None:
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_credentials (
+                username TEXT PRIMARY KEY,
+                password_hash TEXT NOT NULL,
+                password_salt TEXT NOT NULL,
+                iterations INTEGER NOT NULL CHECK (iterations > 0),
+                created_at TEXT NOT NULL DEFAULT (DATETIME('now'))
+            )
+            """
+        )
+
+
+def has_local_credentials(data_file: Path) -> bool:
+    try:
+        with _connect(data_file) as connection:
+            result = connection.execute("SELECT COUNT(*) FROM app_credentials").fetchone()
+        return bool(result and result[0] > 0)
+    except sqlite3.OperationalError:
+        return False
+
+
+def get_stored_credentials(data_file: Path) -> tuple[str, str, str, int] | None:
+    try:
+        with _connect(data_file) as connection:
+            row = connection.execute(
+                """
+                SELECT username, password_hash, password_salt, iterations
+                FROM app_credentials
+                LIMIT 1
+                """
+            ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+
+    if row is None:
+        return None
+    return row[0], row[1], row[2], int(row[3])
+
+
+def save_credentials(data_file: Path, username: str, password_hash: str, password_salt: str, iterations: int) -> None:
+    create_schema(data_file)
+    with _connect(data_file) as connection:
+        connection.execute(
+            """
+            INSERT INTO app_credentials (username, password_hash, password_salt, iterations)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(username) DO UPDATE SET
+                password_hash = excluded.password_hash,
+                password_salt = excluded.password_salt,
+                iterations = excluded.iterations
+            """
+        , (username, password_hash, password_salt, iterations)
+        )
+
+
+def clear_credentials(data_file: Path) -> None:
+    if not data_file.exists():
+        return
+    with _connect(data_file) as connection:
+        try:
+            connection.execute("DELETE FROM app_credentials")
+        except sqlite3.OperationalError:
+            return
 
 
 def _read_legacy_json(json_file: Path) -> List[Expense]:
@@ -105,6 +237,8 @@ def _read_legacy_json(json_file: Path) -> List[Expense]:
                 category=item.get("category", "General"),
                 recurring_monthly=bool(item.get("recurring_monthly", False)),
                 due_day=item.get("due_day"),
+                cadence=item.get("cadence", ""),
+                ends_on=item.get("ends_on"),
                 expense_type=item.get("expense_type", "Fixed"),
                 color=item.get("color", "#f4a261"),
             )
@@ -124,21 +258,38 @@ def _to_dict(expense: Expense) -> dict[str, object]:
         "due_day": expense.due_day,
         "expense_type": expense.expense_type,
         "color": expense.color,
+        "cadence": expense.cadence,
+        "ends_on": expense.ends_on,
     }
 
 
 def _upsert_expenses(connection: sqlite3.Connection, expenses: List[Expense]) -> None:
     data = [_to_dict(item) for item in expenses]
     if data:
+        # ON CONFLICT ... DO UPDATE rather than INSERT OR REPLACE: the latter
+        # deletes the conflicting row first, and expense_payments cascades on
+        # delete, so replacing a row would silently wipe its paid history.
         connection.executemany(
             """
-            INSERT OR REPLACE INTO expenses (
+            INSERT INTO expenses (
                 id, description, amount, date, account, category,
-                recurring_monthly, due_day, expense_type, color
+                recurring_monthly, due_day, expense_type, color, cadence, ends_on
             ) VALUES (
                 :id, :description, :amount, :date, :account, :category,
-                :recurring_monthly, :due_day, :expense_type, :color
+                :recurring_monthly, :due_day, :expense_type, :color, :cadence, :ends_on
             )
+            ON CONFLICT(id) DO UPDATE SET
+                description = excluded.description,
+                amount = excluded.amount,
+                date = excluded.date,
+                account = excluded.account,
+                category = excluded.category,
+                recurring_monthly = excluded.recurring_monthly,
+                due_day = excluded.due_day,
+                expense_type = excluded.expense_type,
+                color = excluded.color,
+                cadence = excluded.cadence,
+                ends_on = excluded.ends_on
             """,
             data,
         )
@@ -184,7 +335,8 @@ def load_expenses(data_file: Path) -> List[Expense]:
         connection.row_factory = sqlite3.Row
         rows = connection.execute(
             """
-            SELECT id, description, amount, date, account, category, recurring_monthly, due_day, expense_type, color
+            SELECT id, description, amount, date, account, category, recurring_monthly,
+                   due_day, expense_type, color, cadence, ends_on
             FROM expenses
             ORDER BY date, description
             """
@@ -202,6 +354,8 @@ def load_expenses(data_file: Path) -> List[Expense]:
             due_day=row["due_day"] if row["due_day"] is not None else None,
             expense_type=row["expense_type"] or "Fixed",
             color=row["color"] or "#f4a261",
+            cadence=row["cadence"] or "",
+            ends_on=row["ends_on"],
         )
         for row in rows
     ]
@@ -244,13 +398,47 @@ def add_expense(data_file: Path, expense: Expense) -> None:
             """
             INSERT INTO expenses (
                 id, description, amount, date, account, category, recurring_monthly,
-                due_day, expense_type, color
+                due_day, expense_type, color, cadence, ends_on
             ) VALUES (
                 :id, :description, :amount, :date, :account, :category, :recurring_monthly,
-                :due_day, :expense_type, :color
+                :due_day, :expense_type, :color, :cadence, :ends_on
             )
             """,
             payload,
+        )
+
+
+def update_expense(data_file: Path, expense: Expense) -> None:
+    """Change an existing subscription in place, keeping its paid history.
+
+    The id is deliberately never touched: expense_payments references it, so
+    rewriting the row under a new id — or deleting and re-adding — would lose
+    every month the user had already marked as paid.
+    """
+    if data_file.suffix.lower() == ".json":
+        expenses = [expense if item.id == expense.id else item for item in load_expenses(data_file)]
+        save_expenses(data_file, expenses)
+        return
+
+    _ensure_db_initialized_and_seeded(data_file)
+    with _connect(data_file) as connection:
+        connection.execute(
+            """
+            UPDATE expenses SET
+                description = :description,
+                amount = :amount,
+                date = :date,
+                account = :account,
+                category = :category,
+                recurring_monthly = :recurring_monthly,
+                due_day = :due_day,
+                expense_type = :expense_type,
+                color = :color,
+                cadence = :cadence,
+                ends_on = :ends_on
+            WHERE id = :id
+            """,
+            _to_dict(expense),
         )
 
 
@@ -282,6 +470,9 @@ def create_expense(
     due_day: Optional[int] = None,
     expense_type: str = "Fixed",
     color: str = "#f4a261",
+    cadence: str = "",
+    ends_on: Optional[str] = None,
+    expense_id: Optional[str] = None,
 ) -> Expense:
     normalized_amount = None if amount is None else round(float(amount), 2)
     normalized_date = expense_date or ""
@@ -299,7 +490,7 @@ def create_expense(
             due_day = None
 
     return Expense(
-        id=datetime.now().strftime("%Y%m%d%H%M%S%f"),
+        id=expense_id or datetime.now().strftime("%Y%m%d%H%M%S%f"),
         description=description.strip(),
         amount=normalized_amount,
         date=normalized_date,
@@ -309,17 +500,76 @@ def create_expense(
         due_day=due_day,
         expense_type=expense_type.strip() or "Fixed",
         color=color,
+        cadence=cadence,
+        ends_on=ends_on,
     )
 
 
-def _is_in_target_month(expense: Expense, year: int, month: int) -> bool:
-    month_prefix = f"{year:04d}-{month:02d}-"
+def _parse_iso(value: Optional[str]) -> Optional[date]:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value.strip()[:10])
+    except ValueError:
+        return None
+
+
+def _day_in_month(year: int, month: int, day: int) -> date:
+    """Clamp a day-of-month to a real date, so a 31st bills on the 30th in June."""
+    return date(year, month, min(day, calendar.monthrange(year, month)[1]))
+
+
+def _billing_day(expense: Expense) -> int:
+    if expense.due_day is not None and 1 <= expense.due_day <= 31:
+        return expense.due_day
+    start = _parse_iso(expense.date)
+    return start.day if start else 1
+
+
+def occurs_on(expense: Expense, day: date) -> bool:
+    """Does this subscription bill on the given day?
+
+    The stored `date` is the first billing date and `ends_on` the last, so a
+    subscription never appears before it started or after it was cancelled.
+    """
+    start = _parse_iso(expense.date)
+    if start is None or day < start:
+        return False
+
+    end = _parse_iso(expense.ends_on)
+    if end is not None and day > end:
+        return False
+
+    cadence = expense.cadence
+    if cadence == CADENCE_ONCE:
+        return day == start
+    if cadence == CADENCE_WEEKLY:
+        return (day - start).days % 7 == 0
+
+    if day != _day_in_month(day.year, day.month, _billing_day(expense)):
+        return False
+
+    if cadence == CADENCE_MONTHLY:
+        return True
+    months_apart = (day.year - start.year) * 12 + (day.month - start.month)
+    if cadence == CADENCE_QUARTERLY:
+        return months_apart % 3 == 0
+    if cadence == CADENCE_YEARLY:
+        return months_apart % 12 == 0
+    return False
+
+
+def occurrences_in_month(expense: Expense, year: int, month: int) -> List[date]:
     last_day = calendar.monthrange(year, month)[1]
+    return [
+        candidate
+        for candidate in (date(year, month, number) for number in range(1, last_day + 1))
+        if occurs_on(expense, candidate)
+    ]
 
-    if expense.recurring_monthly:
-        return expense.due_day is not None and 1 <= expense.due_day <= last_day
 
-    return expense.date.startswith(month_prefix)
+def _is_in_target_month(expense: Expense, year: int, month: int) -> bool:
+    return bool(occurrences_in_month(expense, year, month))
 
 
 def get_expenses_for_month(expenses: List[Expense], year: int, month: int, account: Optional[str] = None) -> List[Expense]:
@@ -339,8 +589,17 @@ def get_expenses_for_month(expenses: List[Expense], year: int, month: int, accou
 
 
 def get_total_for_month(expenses: List[Expense], year: int, month: int, account: Optional[str] = None) -> float:
-    month_expenses = get_expenses_for_month(expenses, year, month, account)
-    return round(sum(expense.amount or 0 for expense in month_expenses if expense.amount is not None), 2)
+    # A weekly subscription bills several times a month, so the month's cost is
+    # the amount multiplied by how often it actually falls due.
+    total = 0.0
+    for expense in get_expenses_for_month(expenses, year, month, account):
+        if expense.amount is not None:
+            total += expense.amount * len(occurrences_in_month(expense, year, month))
+    return round(total, 2)
+
+
+def get_yearly_total(expenses: List[Expense], year: int, account: Optional[str] = None) -> float:
+    return round(sum(get_total_for_month(expenses, year, month, account) for month in range(1, 13)), 2)
 
 
 def get_paid_expense_ids(data_file: Path, year: int, month: int, account: Optional[str] = None) -> Set[str]:
@@ -370,11 +629,11 @@ def get_paid_expense_ids(data_file: Path, year: int, month: int, account: Option
 def get_paid_total_for_month(
     expenses: List[Expense], paid_expense_ids: Set[str], year: int, month: int, account: Optional[str] = None
 ) -> float:
-    month_expenses = get_expenses_for_month(expenses, year, month, account)
-    return round(
-        sum(expense.amount or 0 for expense in month_expenses if expense.id in paid_expense_ids and expense.amount is not None),
-        2,
-    )
+    total = 0.0
+    for expense in get_expenses_for_month(expenses, year, month, account):
+        if expense.amount is not None and expense.id in paid_expense_ids:
+            total += expense.amount * len(occurrences_in_month(expense, year, month))
+    return round(total, 2)
 
 
 def set_expense_paid(data_file: Path, expense_id: str, year: int, month: int, paid: bool) -> None:
@@ -403,46 +662,32 @@ def set_expense_paid(data_file: Path, expense_id: str, year: int, month: int, pa
 def get_expenses_for_day(
     expenses: List[Expense], day: date, account: Optional[str] = None
 ) -> List[Expense]:
-    day_string = day.strftime("%Y-%m-%d")
-    day_number = day.day
     unique_by_id: dict[str, Expense] = {}
-
     for expense in expenses:
         if account and account != "All accounts" and expense.account != account:
             continue
-
-        is_match = False
-        if not expense.recurring_monthly and expense.date == day_string:
-            is_match = True
-        elif expense.due_day == day_number and expense.due_day is not None and not expense.amount is None and expense.recurring_monthly:
-            is_match = True
-        elif expense.amount is None and expense.recurring_monthly and expense.due_day == day_number:
-            is_match = True
-        elif not expense.recurring_monthly and expense.amount is None and expense.date == day_string:
-            is_match = True
-
-        if is_match:
+        if occurs_on(expense, day):
             unique_by_id[expense.id] = expense
 
     return sorted(unique_by_id.values(), key=lambda item: (item.account, item.description.lower()))
 
 
 def get_expenses_by_day(expenses: List[Expense], year: int, month: int, account: Optional[str] = None) -> dict[str, List[Expense]]:
-    month_prefix = f"{year:04d}-{month:02d}-"
     by_day: dict[str, List[Expense]] = {}
     for expense in get_expenses_for_month(expenses, year, month, account):
-        if expense.date.startswith(month_prefix):
-            day_key = expense.date
-        elif expense.due_day is not None and 1 <= expense.due_day <= calendar.monthrange(year, month)[1]:
-            day_key = f"{year:04d}-{month:02d}-{expense.due_day:02d}"
-        else:
-            continue
-
-        by_day.setdefault(day_key, [])
-        if expense not in by_day[day_key]:
-            by_day[day_key].append(expense)
-
+        for occurrence in occurrences_in_month(expense, year, month):
+            by_day.setdefault(occurrence.isoformat(), []).append(expense)
     return by_day
+
+
+def get_upcoming(expenses: List[Expense], start: date, days: int = 7, account: Optional[str] = None) -> List[tuple]:
+    """Every billing date in the next `days` days, as (date, expense) pairs."""
+    upcoming: List[tuple] = []
+    for offset in range(days + 1):
+        day = start + timedelta(days=offset)
+        for expense in get_expenses_for_day(expenses, day, account):
+            upcoming.append((day, expense))
+    return upcoming
 
 
 def remove_expense(expenses: List[Expense], expense_id: str) -> List[Expense]:
