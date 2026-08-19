@@ -27,3 +27,6 @@ versions/
 
 # Assistant working notes. Kept locally; not useful to anyone reading the repo.
 aristotle/
+
+# Data backups taken before a reset. Local only.
+backup-*/
