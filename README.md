@@ -1,4 +1,4 @@
-# Subscription Tracker
+# DueKhata
 
 A Windows desktop application for keeping track of recurring subscriptions and monthly bills. It
 shows what is due, what has been paid, and what is still to leave your account this month.
@@ -9,7 +9,7 @@ Everything is stored locally. There is no account, no server, and no network acc
 
 ## Download
 
-**[Download the latest release](https://github.com/paudel01anurag/subscription-tracker/releases/latest)**
+**[Download the latest release](https://github.com/paudel01anurag/duekhata/releases/latest)**
 — take the ZIP under *Assets*, not the green `Code` button, which gives you the source rather than
 the application.
 
@@ -56,7 +56,7 @@ python main.py
 Subscriptions and payment records live in a SQLite database created on first run:
 
 ```text
-%LOCALAPPDATA%\SubscriptionTracker\expenses.db
+%LOCALAPPDATA%\DueKhata\expenses.db
 ```
 
 Never in the application folder, so replacing the executable with a newer version leaves your data
@@ -106,5 +106,5 @@ A personal project shared openly, rather than a finished product.
 ## Version history
 
 See [CHANGELOG.md](CHANGELOG.md) for what changed in each version, and the
-[releases page](https://github.com/paudel01anurag/subscription-tracker/releases) to download any
+[releases page](https://github.com/paudel01anurag/duekhata/releases) to download any
 earlier build.

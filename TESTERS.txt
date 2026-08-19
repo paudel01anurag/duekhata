@@ -38,7 +38,7 @@ Windows copies the "from the internet" tag onto everything you pull out of it.
   3. At the bottom of the General tab, tick "Unblock", then click OK.
      (If there is no "Unblock" box, there is nothing to do - carry on.)
   4. Extract the ZIP to a normal folder, for example your Desktop or Documents.
-  5. Double-click "Subscription Tracker.exe".
+  5. Double-click "DueKhata.exe".
 
 If you skipped step 3 and see the blue SmartScreen box, you can still continue:
 click "More info", then "Run anyway".
@@ -66,7 +66,7 @@ WHERE YOUR DATA IS STORED
 -------------------------
 The application creates its own empty database the first time you run it:
 
-    %LOCALAPPDATA%\SubscriptionTracker\expenses.db
+    %LOCALAPPDATA%\DueKhata\expenses.db
 
 Paste that path into the File Explorer address bar to find it. Nothing is sent
 anywhere - there is no network connection of any kind. No data from anybody
@@ -80,8 +80,8 @@ rather than a lock, and avoid putting genuinely sensitive information in.
 
 TO REMOVE IT COMPLETELY
 -----------------------
-  1. Delete "Subscription Tracker.exe".
-  2. Delete the folder %LOCALAPPDATA%\SubscriptionTracker
+  1. Delete "DueKhata.exe".
+  2. Delete the folder %LOCALAPPDATA%\DueKhata
 
 There is no installer and nothing is written to the registry.
 

@@ -16,7 +16,7 @@ try {
         --noconfirm `
         --onefile `
         --windowed `
-        --name "Subscription Tracker" `
+        --name "DueKhata" `
         --collect-all tkcalendar `
         --hidden-import babel.numbers `
         main.py
@@ -28,7 +28,7 @@ try {
         throw "PyInstaller failed with exit code $buildExitCode."
     }
 
-    $executable = Join-Path $projectDirectory "dist\Subscription Tracker.exe"
+    $executable = Join-Path $projectDirectory "dist\DueKhata.exe"
     if (-not (Test-Path $executable)) {
         throw "PyInstaller reported success but $executable is missing."
     }
@@ -54,7 +54,7 @@ try {
         ForEach-Object { Move-Item $_.FullName $archiveDirectory -Force }
 
     $stamp = Get-Date -Format "yyyy-MM-dd"
-    $archive = Join-Path $archiveDirectory "Subscription Tracker V$major ($stamp).zip"
+    $archive = Join-Path $archiveDirectory "DueKhata V$major ($stamp).zip"
     if (Test-Path $archive) { Remove-Item $archive -Force }
 
     $readme = Join-Path $projectDirectory "dist\READ ME FIRST.txt"

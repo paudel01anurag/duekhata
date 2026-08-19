@@ -50,8 +50,12 @@ from expense_tracker import (
 )
 
 
-APP_VERSION = "3.0.0"
-APP_DATA_FOLDER = "SubscriptionTracker"
+APP_VERSION = "3.1.0"
+APP_NAME = "DueKhata"
+APP_DATA_FOLDER = "DueKhata"
+
+# Folders used before the rename, checked once so an upgrade keeps its data.
+PREVIOUS_APP_DATA_FOLDERS = ("SubscriptionTracker",)
 AUTH_PASSWORD_ITERATIONS = 200_000
 AUTH_PASSWORD_MIN_LENGTH = 8
 AUTH_RECOVER_SENTINEL = "__subscription_tracker_recover__"
@@ -66,16 +70,42 @@ def _parse_date(value: str | None):
         return None
 
 
+def _adopt_previous_data_folder(app_data_directory: Path) -> None:
+    """Carry data over from the folder used before the application was renamed.
+
+    Someone upgrading from Subscription Tracker has their subscriptions under the
+    old name. Without this the application would start empty and look as though
+    their data had been lost. The old folder is copied rather than moved, so it
+    stays behind as an accidental backup.
+    """
+    if (app_data_directory / "expenses.db").exists():
+        return
+
+    for previous_name in PREVIOUS_APP_DATA_FOLDERS:
+        previous_directory = app_data_directory.parent / previous_name
+        if previous_directory == app_data_directory or not previous_directory.is_dir():
+            continue
+        if not (previous_directory / "expenses.db").exists():
+            continue
+        for file_name in ("expenses.db", "expenses.json"):
+            source_file = previous_directory / file_name
+            if source_file.exists():
+                shutil.copy2(source_file, app_data_directory / file_name)
+        return
+
+
 def get_app_data_file() -> Path:
     local_app_data = os.getenv("LOCALAPPDATA")
     if local_app_data:
         app_data_directory = Path(local_app_data) / APP_DATA_FOLDER
     else:
-        app_data_directory = Path.home() / ".subscription_tracker"
+        app_data_directory = Path.home() / ".duekhata"
 
     app_data_directory.mkdir(parents=True, exist_ok=True)
     source_directory = Path(__file__).resolve().parent
     database_file = app_data_directory / "expenses.db"
+
+    _adopt_previous_data_folder(app_data_directory)
 
     # A packaged build must always start with an empty database. Seeding only
     # happens when running from source, so that no personal financial data or
@@ -1054,7 +1084,7 @@ class AuthDialog(tk.Toplevel):
 class ExpenseTrackerApp:
     def __init__(self, root: tk.Tk, data_file: Path, username: str | None = None) -> None:
         self.root = root
-        self.root.title("Subscription Tracker")
+        self.root.title(APP_NAME)
         self.root.geometry("1180x800")
         self.root.minsize(1020, 700)
         self.root.configure(bg=WARM_LIGHT["background"])

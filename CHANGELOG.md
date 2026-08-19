@@ -1,7 +1,22 @@
 # Changelog
 
 What changed in each version. Newest first. Every version can be downloaded from the
-[releases page](https://github.com/paudel01anurag/subscription-tracker/releases).
+[releases page](https://github.com/paudel01anurag/duekhata/releases).
+
+## v3.1.0 — 19 August 2026
+
+**Renamed to DueKhata.** *Due* for what is owed, *khata* (खाता) for the ledger it is written in.
+
+**Changed**
+
+- The application, the executable and the data folder are now named DueKhata.
+
+**Migration**
+
+- Upgrading from Subscription Tracker keeps everything. On first run the old
+  `%LOCALAPPDATA%\SubscriptionTracker` folder is copied to `%LOCALAPPDATA%\DueKhata`, subscriptions
+  and login included. The old folder is left in place as a fallback and can be deleted once you are
+  satisfied nothing is missing.
 
 ## v3.0.0 — 18 August 2026
 
