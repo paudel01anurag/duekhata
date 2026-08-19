@@ -1443,8 +1443,12 @@ class ExpenseTrackerApp:
         footer.grid(row=3, column=0, sticky="ew", padx=SPACE_3, pady=SPACE_3)
         footer.columnconfigure(0, weight=1)
 
+        self.user_canvas = tk.Canvas(footer, height=34, bg=theme["surface_1"], highlightthickness=0)
+        self.user_canvas.grid(row=0, column=0, sticky="ew", padx=(0, SPACE_1))
+        self.user_canvas.bind("<Configure>", lambda _event: self._draw_user())
+
         self.theme_button = IconButton(footer, ICON_DARK_MODE, self.toggle_theme, theme, variant="tonal")
-        self.theme_button.grid(row=0, column=0, sticky="w")
+        self.theme_button.grid(row=0, column=1, sticky="e")
         self.themed_buttons.append(self.theme_button)
 
     def _build_topbar(self, parent: tk.Frame, theme: dict) -> None:
@@ -1688,6 +1692,12 @@ class ExpenseTrackerApp:
         return (x1 + SPACE_4, y1 + SPACE_4 + 22, x2 - SPACE_4, y2 - SPACE_3)
 
     def _draw_brand(self) -> None:
+        """The wordmark: a ruled ledger mark, then Due in ink and Khata in accent.
+
+        Splitting the two halves by colour is what makes the name read as one
+        word rather than two, and it carries the meaning: what is due, and the
+        ledger it is written in.
+        """
         if not hasattr(self, "brand_canvas"):
             return
         theme = self._theme()
@@ -1696,21 +1706,62 @@ class ExpenseTrackerApp:
         canvas.delete("all")
         width = max(canvas.winfo_width(), 1)
 
-        initial = (self.authenticated_username or "?").strip()[:1].upper()
-        canvas.create_oval(SPACE_2, 14, SPACE_2 + 34, 48, fill=theme["accent_soft"], outline=theme["accent"])
+        # A small ledger: three ruled entries, each shorter than the last.
+        badge = 34
+        badge_x, badge_y = SPACE_3, 15
+        draw_rounded_rect(
+            canvas, badge_x, badge_y, badge_x + badge, badge_y + badge, 11, theme["accent"]
+        )
+        for index, line_width in enumerate((17, 13, 9)):
+            line_y = badge_y + 11 + index * 6
+            canvas.create_rectangle(
+                badge_x + 9, line_y, badge_x + 9 + line_width, line_y + 2,
+                fill=theme["on_accent"], outline="",
+            )
+
+        wordmark_font = display_font(17)
+        measure = tkfont.Font(self.root, font=wordmark_font)
+        text_x = badge_x + badge + 11
+        baseline = badge_y + 13
+
         canvas.create_text(
-            SPACE_2 + 17, 31, text=initial, fill=theme["accent"], font=text_font(13, bold=True)
+            text_x, baseline, text="Due", anchor="w", fill=theme["text"], font=wordmark_font
         )
         canvas.create_text(
-            SPACE_2 + 44, 24, text=self._display_name(), anchor="w",
-            fill=theme["text"], font=text_font(11, bold=True),
+            text_x + measure.measure("Due"), baseline, text="Khata", anchor="w",
+            fill=theme["accent"], font=wordmark_font,
         )
         canvas.create_text(
-            SPACE_2 + 44, 40, text="v" + APP_VERSION, anchor="w",
+            text_x + 1, badge_y + 30, text="v" + APP_VERSION, anchor="w",
             fill=theme["text_muted"], font=text_font(8),
         )
+
         canvas.create_line(
-            SPACE_2, 66, max(width - SPACE_2, SPACE_2), 66, fill=theme["outline_variant"]
+            SPACE_3, 66, max(width - SPACE_3, SPACE_3), 66, fill=theme["outline_variant"]
+        )
+
+    def _draw_user(self) -> None:
+        """Who is signed in, sitting at the foot of the rail."""
+        if not hasattr(self, "user_canvas"):
+            return
+        theme = self._theme()
+        canvas = self.user_canvas
+        canvas.configure(bg=theme["surface_1"])
+        canvas.delete("all")
+        width = max(canvas.winfo_width(), 1)
+
+        initial = (self.authenticated_username or "?").strip()[:1].upper()
+        size = 26
+        top = 4
+        canvas.create_oval(
+            0, top, size, top + size, fill=theme["accent_soft"], outline=theme["accent"]
+        )
+        canvas.create_text(
+            size // 2, top + size // 2, text=initial, fill=theme["accent"], font=text_font(10, bold=True)
+        )
+        canvas.create_text(
+            size + 9, top + size // 2, text=self._display_name(), anchor="w",
+            fill=theme["text_secondary"], font=text_font(9, bold=True), width=max(20, width - size - 12),
         )
 
     def _draw_category_chart(self) -> None:
@@ -2006,6 +2057,7 @@ class ExpenseTrackerApp:
         self._apply_color_pallets()
 
         self._draw_brand()
+        self._draw_user()
         self._draw_stat_cards()
         self._draw_category_chart()
         self._draw_upcoming()
