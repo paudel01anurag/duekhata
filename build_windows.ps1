@@ -42,8 +42,19 @@ try {
 
     # Package the executable on its own. The personal database lives in
     # %LOCALAPPDATA% and must never be included in something handed to a tester.
+    #
+    # Every ZIP goes into dist\archive so that dist itself holds exactly one
+    # thing: the executable that was just built. That way there is never a
+    # question of which file in dist is the current one.
+    $archiveDirectory = Join-Path $projectDirectory "dist\archive"
+    if (-not (Test-Path $archiveDirectory)) {
+        New-Item -ItemType Directory -Path $archiveDirectory | Out-Null
+    }
+    Get-ChildItem -Path (Join-Path $projectDirectory "dist") -Filter "*.zip" |
+        ForEach-Object { Move-Item $_.FullName $archiveDirectory -Force }
+
     $stamp = Get-Date -Format "yyyy-MM-dd"
-    $archive = Join-Path $projectDirectory "dist\Subscription Tracker V$major ($stamp).zip"
+    $archive = Join-Path $archiveDirectory "Subscription Tracker V$major ($stamp).zip"
     if (Test-Path $archive) { Remove-Item $archive -Force }
 
     $readme = Join-Path $projectDirectory "dist\READ ME FIRST.txt"
@@ -58,6 +69,7 @@ try {
     Write-Host "Version    : $version"
     Write-Host "Executable : $executable ($sizeInMb MB)"
     Write-Host "Share this : $archive"
+    Write-Host "Note       : dist holds only the current executable; ZIPs live in dist\archive."
     Write-Host "SHA-256    : $hash"
 }
 finally {
