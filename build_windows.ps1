@@ -38,7 +38,6 @@ try {
     $versionLine = Select-String -Path (Join-Path $projectDirectory "main.py") -Pattern '^APP_VERSION = "(.+)"' | Select-Object -First 1
     if (-not $versionLine) { throw "Could not read APP_VERSION from main.py." }
     $version = $versionLine.Matches[0].Groups[1].Value
-    $major = $version.Split(".")[0]
 
     # Package the executable on its own. The personal database lives in
     # %LOCALAPPDATA% and must never be included in something handed to a tester.
@@ -53,8 +52,10 @@ try {
     Get-ChildItem -Path (Join-Path $projectDirectory "dist") -Filter "*.zip" |
         ForEach-Object { Move-Item $_.FullName $archiveDirectory -Force }
 
+    # Name by the full version, not just the major. Naming by major alone meant
+    # every 3.x build wrote over the previous one in the archive.
     $stamp = Get-Date -Format "yyyy-MM-dd"
-    $archive = Join-Path $archiveDirectory "DueKhata V$major ($stamp).zip"
+    $archive = Join-Path $archiveDirectory "DueKhata v$version ($stamp).zip"
     if (Test-Path $archive) { Remove-Item $archive -Force }
 
     $readme = Join-Path $projectDirectory "dist\READ ME FIRST.txt"

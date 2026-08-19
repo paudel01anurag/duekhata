@@ -3,6 +3,24 @@
 What changed in each version. Newest first. Every version can be downloaded from the
 [releases page](https://github.com/paudel01anurag/duekhata/releases).
 
+## v3.2.0 — 19 August 2026
+
+**Added**
+
+- A wordmark in the sidebar, so the application says its own name.
+- Filters in the Subscriptions view: a search box that matches both the name and the category, a
+  category list and a repeats list. A count above the table says how many of the total are showing.
+- Statistics can now be grouped by category or by account, and drawn as a donut or as ranked bars.
+  The donut carries the year's total in its centre.
+
+**Fixed**
+
+- The calendar was squeezed. The day list beside it grew as the window grew, taking width it had no
+  use for, while the calendar starved; it is now a fixed width and every spare pixel goes to the
+  calendar. At 1680px a cell went from 111px to 141px. The default window also grew to 1360x880,
+  which the sidebar had made necessary and nobody had accounted for.
+- The STATUS column in the day list was clipped off the edge of the panel.
+
 ## v3.1.0 — 19 August 2026
 
 **Renamed to DueKhata.** *Due* for what is owed, *khata* (खाता) for the ledger it is written in.
