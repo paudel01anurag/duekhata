@@ -50,7 +50,7 @@ from expense_tracker import (
 )
 
 
-APP_VERSION = "2.0.0"
+APP_VERSION = "3.0.0"
 APP_DATA_FOLDER = "SubscriptionTracker"
 AUTH_PASSWORD_ITERATIONS = 200_000
 AUTH_PASSWORD_MIN_LENGTH = 8
