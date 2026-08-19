@@ -16,6 +16,15 @@ from tkinter import font as tkfont
 from tkcalendar import DateEntry
 
 from expense_tracker import (
+    CADENCE_MONTHLY,
+    CADENCE_ONCE,
+    CADENCE_QUARTERLY,
+    CADENCE_WEEKLY,
+    CADENCE_YEARLY,
+    next_occurrence,
+    get_category_totals,
+    get_monthly_totals,
+    get_upcoming,
     CADENCE_LABELS,
     CADENCE_MONTHLY,
     CADENCE_ONCE,
@@ -156,6 +165,10 @@ ICON_LIGHT_MODE = chr(0xE706)
 ICON_DARK_MODE = chr(0xE708)
 ICON_PAID = chr(0xE73E)
 ICON_DELETE = chr(0xE74D)
+ICON_DASHBOARD = chr(0xE80F)
+ICON_LIST = chr(0xE8FD)
+ICON_CALENDAR = chr(0xE787)
+ICON_STATS = chr(0xE9D9)
 ICON_EDIT = chr(0xE70F)
 
 # Fallback glyphs for machines without the icon font.
@@ -167,11 +180,23 @@ ICON_FALLBACK = {
     ICON_DARK_MODE: "☾",
     ICON_PAID: "✓",
     ICON_DELETE: "✕",
+    ICON_DASHBOARD: "▦",
+    ICON_LIST: "≡",
+    ICON_CALENDAR: "▤",
+    ICON_STATS: "▓",
     ICON_EDIT: "✎",
 }
 
 # 4px base grid.
 SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_5, SPACE_6 = 4, 8, 12, 16, 20, 24
+
+NAV_WIDTH = 196
+
+# Chart colours, warm-leaning so they sit with the palette rather than fight it.
+CATEGORY_COLOURS = (
+    "#b65f3c", "#5b8ac7", "#5aa469", "#c2557a",
+    "#d9a441", "#3aa0b8", "#8a6bbf", "#7a8b4a",
+)
 
 RADIUS_CHIP = 8
 RADIUS_CARD = 14
@@ -186,15 +211,33 @@ def resolve_fonts(root: tk.Misc) -> None:
     except tk.TclError:
         return
 
-    for candidate in ("Segoe UI Variable Text", "Segoe UI"):
+    # Windows first, then the macOS system faces, then the common Linux ones.
+    # Every list ends in a family Tk will always resolve to something sane.
+    text_candidates = (
+        "Segoe UI Variable Text", "Segoe UI",          # Windows 11 / 10
+        "SF Pro Text", ".AppleSystemUIFont", "Helvetica Neue",  # macOS
+        "Cantarell", "DejaVu Sans",                    # Linux
+        "TkDefaultFont",
+    )
+    display_candidates = (
+        "Segoe UI Variable Display", "Segoe UI",
+        "SF Pro Display", ".AppleSystemUIFont", "Helvetica Neue",
+        "Cantarell", "DejaVu Sans",
+        "TkDefaultFont",
+    )
+    # No macOS or Linux equivalent ships the Fluent glyphs, so on those platforms
+    # _FONT_ICON stays empty and icon() falls back to plain-text symbols.
+    icon_candidates = ("Segoe Fluent Icons", "Segoe MDL2 Assets")
+
+    for candidate in text_candidates:
         if candidate in families:
             _FONT_TEXT = candidate
             break
-    for candidate in ("Segoe UI Variable Display", "Segoe UI"):
+    for candidate in display_candidates:
         if candidate in families:
             _FONT_DISPLAY = candidate
             break
-    for candidate in ("Segoe Fluent Icons", "Segoe MDL2 Assets"):
+    for candidate in icon_candidates:
         if candidate in families:
             _FONT_ICON = candidate
             break
@@ -660,6 +703,61 @@ class PillButton(_StatefulCanvasButton):
             )
             text_x = start + glyph_width + self._font.measure(self.text) // 2
         self.create_text(text_x, height // 2, text=self.text, fill=foreground, font=text_font(10, bold=True))
+
+
+class NavItem(_StatefulCanvasButton):
+    """One row in the sidebar. Reads as a pill when it is the active view."""
+
+    def __init__(self, master: tk.Misc, glyph: str, label: str, command, theme: dict) -> None:
+        super().__init__(master, theme, height=42)
+        self.glyph = glyph
+        self.label = label
+        self.command = command
+        self.selected = False
+        self.surface = theme["surface_1"]
+        self.configure(bg=self.surface, width=NAV_WIDTH - SPACE_4)
+        self.redraw()
+
+    def set_selected(self, selected: bool) -> None:
+        self.selected = selected
+        self.redraw()
+
+    def invoke(self) -> None:
+        if self.command:
+            self.command()
+
+    def redraw(self) -> None:
+        self.delete("all")
+        theme = self.theme
+        width = max(self.winfo_reqwidth(), 1)
+        height = 42
+
+        if self.selected:
+            fill = theme["accent_soft"]
+            foreground = theme["accent"]
+        else:
+            fill = self._state_overlay(self.surface)
+            foreground = theme["text_secondary"] if not self._hovered else theme["text"]
+
+        if fill != self.surface or self.selected:
+            draw_rounded_rect(self, 2, 3, width - 3, height - 4, RADIUS_CHIP + 2, fill)
+
+        self.create_text(
+            SPACE_3 + 4,
+            height // 2,
+            text=icon(self.glyph),
+            anchor="w",
+            fill=foreground,
+            font=icon_font(12),
+        )
+        self.create_text(
+            SPACE_3 + 28,
+            height // 2,
+            text=self.label,
+            anchor="w",
+            fill=foreground,
+            font=text_font(10, bold=self.selected),
+        )
 
 
 class AuthDialog(tk.Toplevel):
@@ -1149,66 +1247,6 @@ class ExpenseTrackerApp:
         self._refresh_theme_button()
         self.refresh_view()
 
-    def _draw_welcome_card(self) -> None:
-        """The top app bar: product name, greeting, and an avatar monogram."""
-        if not hasattr(self, "welcome_canvas"):
-            return
-        theme = self._theme()
-        self.welcome_canvas.configure(bg=theme["background"])
-        self.welcome_canvas.delete("all")
-        width = max(self.welcome_canvas.winfo_width(), 1)
-        height = max(self.welcome_canvas.winfo_height(), 1)
-
-        avatar_size = 40
-        avatar_x2 = width - SPACE_2
-        avatar_x1 = avatar_x2 - avatar_size
-        avatar_y1 = (height - avatar_size) // 2
-
-        title = "Subscription Tracker"
-        self.welcome_canvas.create_text(
-            SPACE_2,
-            height // 2 - 11,
-            text=title,
-            anchor="w",
-            fill=theme["text"],
-            font=display_font(20),
-        )
-        title_width = tkfont.Font(self.root, font=display_font(20)).measure(title)
-        self.welcome_canvas.create_text(
-            SPACE_2 + title_width + SPACE_2,
-            height // 2 - 7,
-            text=f"v{APP_VERSION}",
-            anchor="w",
-            fill=theme["text_muted"],
-            font=text_font(9),
-        )
-        self.welcome_canvas.create_text(
-            SPACE_2 + 1,
-            height // 2 + 13,
-            text=self._welcome_text(),
-            anchor="w",
-            fill=theme["text_secondary"],
-            font=text_font(10),
-        )
-
-        initial = (self.authenticated_username or "?").strip()[:1].upper()
-        self.welcome_canvas.create_oval(
-            avatar_x1,
-            avatar_y1,
-            avatar_x2,
-            avatar_y1 + avatar_size,
-            fill=theme["accent_soft"],
-            outline=theme["accent"],
-            width=1,
-        )
-        self.welcome_canvas.create_text(
-            (avatar_x1 + avatar_x2) // 2,
-            avatar_y1 + avatar_size // 2,
-            text=initial,
-            fill=theme["accent"],
-            font=text_font(14, bold=True),
-        )
-
     def _draw_stat_cards(self) -> None:
         """Three elevated cards: projected, remaining, and paid this month."""
         if not hasattr(self, "stats_canvas"):
@@ -1303,61 +1341,213 @@ class ExpenseTrackerApp:
             return f"Welcome back, {self._display_name()}  ·  {date.today().strftime('%A, %B %d, %Y')}"
         return f"{date.today().strftime('%A, %B %d, %Y')}"
 
+    # ------------------------------------------------------------------
+    # Layout
+    #
+    # A sidebar selects one of four views, which are stacked in the same grid
+    # cell and raised as needed. The month totals and the account filter are
+    # shared chrome, so they live outside the views and stay put while switching.
+    # ------------------------------------------------------------------
+
+    VIEWS = (
+        ("dashboard", ICON_DASHBOARD, "Dashboard"),
+        ("subscriptions", ICON_LIST, "Subscriptions"),
+        ("calendar", ICON_CALENDAR, "Calendar"),
+        ("statistics", ICON_STATS, "Statistics"),
+    )
+
     def build_ui(self) -> None:
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(1, weight=1)
-
         theme = self._theme()
-        header = tk.Frame(self.root, bg=theme["background"])
-        header.grid(row=0, column=0, sticky="ew", padx=SPACE_6, pady=(SPACE_4, SPACE_2))
-        header.columnconfigure(0, weight=1)
+        self.root.columnconfigure(0, weight=0)
+        self.root.columnconfigure(1, weight=1)
+        self.root.rowconfigure(0, weight=1)
 
-        # Top app bar.
-        self.welcome_canvas = tk.Canvas(header, height=52, bg=theme["background"], highlightthickness=0)
-        self.welcome_canvas.grid(row=0, column=0, sticky="ew")
-        self.welcome_canvas.bind("<Configure>", lambda _event: self._draw_welcome_card())
+        self.themed_buttons = []
+        self._build_sidebar(theme)
 
-        # Summary statistics.
-        self.stats_canvas = tk.Canvas(header, height=86, bg=theme["background"], highlightthickness=0)
-        self.stats_canvas.grid(row=1, column=0, sticky="ew", pady=(SPACE_3, 0))
-        self.stats_canvas.bind("<Configure>", lambda _event: self._draw_stat_cards())
+        content = tk.Frame(self.root, bg=theme["background"])
+        content.grid(row=0, column=1, sticky="nsew")
+        content.columnconfigure(0, weight=1)
+        content.rowconfigure(2, weight=1)
+        self.content_frame = content
 
-        # Month navigation and filters.
-        toolbar = tk.Frame(header, bg=theme["background"])
-        toolbar.grid(row=2, column=0, sticky="ew", pady=(SPACE_4, 0))
-        toolbar.columnconfigure(2, weight=1)
+        self._build_topbar(content, theme)
 
-        self.previous_button = IconButton(toolbar, ICON_CHEVRON_LEFT, self.previous_month, theme, variant="tonal")
-        self.previous_button.grid(row=0, column=0)
-        self.next_button = IconButton(toolbar, ICON_CHEVRON_RIGHT, self.next_month, theme, variant="tonal")
-        self.next_button.grid(row=0, column=1, padx=(SPACE_2, SPACE_3))
-        self.month_label = ttk.Label(toolbar, text="", font=display_font(17))
-        self.month_label.grid(row=0, column=2, sticky="w")
+        self.view_container = tk.Frame(content, bg=theme["background"])
+        self.view_container.grid(row=2, column=0, sticky="nsew", padx=SPACE_6, pady=(0, SPACE_5))
+        self.view_container.columnconfigure(0, weight=1)
+        self.view_container.rowconfigure(0, weight=1)
+
+        self.views = {}
+        self._build_dashboard_view(theme)
+        self._build_subscriptions_view(theme)
+        self._build_calendar_view(theme)
+        self._build_statistics_view(theme)
+        self.show_view("dashboard")
+
+    def _build_sidebar(self, theme: dict) -> None:
+        rail = tk.Frame(self.root, bg=theme["surface_1"], width=NAV_WIDTH)
+        rail.grid(row=0, column=0, sticky="nsw")
+        rail.grid_propagate(False)
+        rail.columnconfigure(0, weight=1)
+        rail.rowconfigure(2, weight=1)
+        self.sidebar = rail
+
+        brand = tk.Canvas(rail, height=76, bg=theme["surface_1"], highlightthickness=0)
+        brand.grid(row=0, column=0, sticky="ew", padx=SPACE_2, pady=(SPACE_2, 0))
+        brand.bind("<Configure>", lambda _event: self._draw_brand())
+        self.brand_canvas = brand
+
+        nav = tk.Frame(rail, bg=theme["surface_1"])
+        nav.grid(row=1, column=0, sticky="ew", padx=SPACE_2, pady=(SPACE_2, 0))
+        nav.columnconfigure(0, weight=1)
+
+        self.nav_items = {}
+        for index, (key, glyph, label) in enumerate(self.VIEWS):
+            item = NavItem(nav, glyph, label, lambda name=key: self.show_view(name), theme)
+            item.grid(row=index, column=0, sticky="ew", pady=1)
+            self.nav_items[key] = item
+            self.themed_buttons.append(item)
+
+        footer = tk.Frame(rail, bg=theme["surface_1"])
+        footer.grid(row=3, column=0, sticky="ew", padx=SPACE_3, pady=SPACE_3)
+        footer.columnconfigure(0, weight=1)
+
+        self.theme_button = IconButton(footer, ICON_DARK_MODE, self.toggle_theme, theme, variant="tonal")
+        self.theme_button.grid(row=0, column=0, sticky="w")
+        self.themed_buttons.append(self.theme_button)
+
+    def _build_topbar(self, parent: tk.Frame, theme: dict) -> None:
+        bar = tk.Frame(parent, bg=theme["background"])
+        bar.grid(row=0, column=0, sticky="ew", padx=SPACE_6, pady=(SPACE_5, SPACE_2))
+        bar.columnconfigure(1, weight=1)
+        self.topbar = bar
+
+        self.view_title = ttk.Label(bar, text="Dashboard", font=display_font(21))
+        self.view_title.grid(row=0, column=0, sticky="w")
+
+        controls = tk.Frame(bar, bg=theme["background"])
+        controls.grid(row=0, column=2, sticky="e")
 
         self.account_box = ttk.Combobox(
-            toolbar,
+            controls,
             textvariable=self.account_filter,
             state="readonly",
-            width=17,
+            width=16,
             font=text_font(10),
         )
-        self.account_box.grid(row=0, column=3, padx=(0, SPACE_2))
+        self.account_box.grid(row=0, column=0, padx=(0, SPACE_2))
         self.account_box.bind("<<ComboboxSelected>>", lambda _event: self.refresh_view())
 
-        self.add_button = PillButton(toolbar, "Add payment", self.open_add_dialog, theme, glyph=ICON_ADD)
-        self.add_button.grid(row=0, column=4, padx=(0, SPACE_2))
-        self.theme_button = IconButton(toolbar, ICON_DARK_MODE, self.toggle_theme, theme, variant="tonal")
-        self.theme_button.grid(row=0, column=5)
-        self.themed_buttons = [self.previous_button, self.next_button, self.add_button, self.theme_button]
+        self.add_button = PillButton(controls, "Add payment", self.open_add_dialog, theme, glyph=ICON_ADD)
+        self.add_button.grid(row=0, column=1)
+        self.themed_buttons.append(self.add_button)
 
-        main = tk.Frame(self.root, bg=theme["background"])
-        main.grid(row=1, column=0, sticky="nsew", padx=SPACE_6, pady=(SPACE_4, SPACE_6))
-        main.columnconfigure(0, weight=3)
-        main.columnconfigure(1, weight=2)
-        main.rowconfigure(0, weight=1)
+        self.subtitle_label = ttk.Label(bar, text="", style="Muted.TLabel")
+        self.subtitle_label.grid(row=1, column=0, columnspan=3, sticky="w", pady=(2, 0))
 
-        self.calendar_frame = ttk.Frame(main)
-        self.calendar_frame.grid(row=0, column=0, sticky="nsew", padx=(0, SPACE_5))
+    def _new_view(self, name: str, theme: dict) -> tk.Frame:
+        frame = tk.Frame(self.view_container, bg=theme["background"])
+        frame.grid(row=0, column=0, sticky="nsew")
+        self.views[name] = frame
+        return frame
+
+    def show_view(self, name: str) -> None:
+        self.active_view = name
+        self.views[name].tkraise()
+        for key, item in self.nav_items.items():
+            item.set_selected(key == name)
+        titles = {key: label for key, _glyph, label in self.VIEWS}
+        self.view_title.config(text=titles.get(name, name.title()))
+        self.refresh_view()
+
+    # --- dashboard ----------------------------------------------------
+    def _build_dashboard_view(self, theme: dict) -> None:
+        view = self._new_view("dashboard", theme)
+        view.columnconfigure(0, weight=3)
+        view.columnconfigure(1, weight=2)
+        view.rowconfigure(1, weight=1)
+
+        self.stats_canvas = tk.Canvas(view, height=92, bg=theme["background"], highlightthickness=0)
+        self.stats_canvas.grid(row=0, column=0, columnspan=2, sticky="ew")
+        self.stats_canvas.bind("<Configure>", lambda _event: self._draw_stat_cards())
+
+        self.category_canvas = tk.Canvas(view, bg=theme["background"], highlightthickness=0)
+        self.category_canvas.grid(row=1, column=0, sticky="nsew", padx=(0, SPACE_4), pady=(SPACE_4, 0))
+        self.category_canvas.bind("<Configure>", lambda _event: self._draw_category_chart())
+
+        self.upcoming_canvas = tk.Canvas(view, bg=theme["background"], highlightthickness=0)
+        self.upcoming_canvas.grid(row=1, column=1, sticky="nsew", pady=(SPACE_4, 0))
+        self.upcoming_canvas.bind("<Configure>", lambda _event: self._draw_upcoming())
+
+        self.dash_trend_canvas = tk.Canvas(view, height=178, bg=theme["background"], highlightthickness=0)
+        self.dash_trend_canvas.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(SPACE_4, 0))
+        self.dash_trend_canvas.bind(
+            "<Configure>", lambda _event: self._draw_trend_chart(self.dash_trend_canvas)
+        )
+
+    # --- subscriptions ------------------------------------------------
+    def _build_subscriptions_view(self, theme: dict) -> None:
+        view = self._new_view("subscriptions", theme)
+        view.columnconfigure(0, weight=1)
+        view.rowconfigure(0, weight=1)
+
+        self.all_list = ttk.Treeview(
+            view,
+            columns=("description", "amount", "cadence", "next", "account", "category"),
+            show="headings",
+        )
+        headings = (
+            ("description", "DESCRIPTION", 210, "w", True),
+            ("amount", "AMOUNT", 95, "e", False),
+            ("cadence", "REPEATS", 100, "w", False),
+            ("next", "NEXT DUE", 120, "w", False),
+            ("account", "ACCOUNT", 110, "w", False),
+            ("category", "CATEGORY", 130, "w", False),
+        )
+        for key, title, width, anchor, stretch in headings:
+            self.all_list.heading(key, text=title, anchor=anchor)
+            self.all_list.column(key, width=width, minwidth=70, anchor=anchor, stretch=stretch)
+        self.all_list.grid(row=0, column=0, sticky="nsew")
+
+        scrollbar = ttk.Scrollbar(view, orient="vertical", command=self.all_list.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        self.all_list.configure(yscrollcommand=scrollbar.set)
+        self.all_list.bind("<Double-1>", self.edit_from_all_list)
+
+        actions = tk.Frame(view, bg=theme["background"])
+        actions.grid(row=1, column=0, columnspan=2, sticky="e", pady=(SPACE_3, 0))
+        self.all_edit_button = PillButton(
+            actions, "Edit", self.edit_from_all_list, theme, variant="tonal", glyph=ICON_EDIT
+        )
+        self.all_edit_button.grid(row=0, column=0, padx=(0, SPACE_2))
+        self.all_delete_button = PillButton(
+            actions, "Delete", self.delete_from_all_list, theme, variant="outlined", glyph=ICON_DELETE
+        )
+        self.all_delete_button.grid(row=0, column=1)
+        self.themed_buttons.extend([self.all_edit_button, self.all_delete_button])
+
+    # --- calendar -----------------------------------------------------
+    def _build_calendar_view(self, theme: dict) -> None:
+        view = self._new_view("calendar", theme)
+        view.columnconfigure(0, weight=3)
+        view.columnconfigure(1, weight=2)
+        view.rowconfigure(1, weight=1)
+
+        monthbar = tk.Frame(view, bg=theme["background"])
+        monthbar.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, SPACE_3))
+        monthbar.columnconfigure(2, weight=1)
+
+        self.previous_button = IconButton(monthbar, ICON_CHEVRON_LEFT, self.previous_month, theme, variant="tonal")
+        self.previous_button.grid(row=0, column=0)
+        self.next_button = IconButton(monthbar, ICON_CHEVRON_RIGHT, self.next_month, theme, variant="tonal")
+        self.next_button.grid(row=0, column=1, padx=(SPACE_2, SPACE_3))
+        self.month_label = ttk.Label(monthbar, text="", font=display_font(16))
+        self.month_label.grid(row=0, column=2, sticky="w")
+        self.themed_buttons.extend([self.previous_button, self.next_button])
+
+        self.calendar_frame = ttk.Frame(view)
+        self.calendar_frame.grid(row=1, column=0, sticky="nsew", padx=(0, SPACE_5))
         for column_index in range(7):
             self.calendar_frame.columnconfigure(column_index, weight=1, uniform="calendar_columns")
         self.calendar_frame.rowconfigure(0, weight=0)
@@ -1368,8 +1558,8 @@ class ExpenseTrackerApp:
         # column, which inflates the frame's requested width and steals space from
         # the calendar every time the layout is recalculated. Pinning the frame's
         # own size stops that feedback loop from reaching the parent grid.
-        self.details_frame = ttk.Frame(main, width=430)
-        self.details_frame.grid(row=0, column=1, sticky="nsew")
+        self.details_frame = ttk.Frame(view, width=400)
+        self.details_frame.grid(row=1, column=1, sticky="nsew")
         self.details_frame.grid_propagate(False)
         self.details_frame.columnconfigure(0, weight=1)
         self.details_frame.rowconfigure(2, weight=1)
@@ -1378,10 +1568,7 @@ class ExpenseTrackerApp:
         self.selected_day_label.grid(row=0, column=0, columnspan=2, sticky="w")
 
         self.day_summary_canvas = tk.Canvas(
-            self.details_frame,
-            height=32,
-            bg=theme["background"],
-            highlightthickness=0,
+            self.details_frame, height=32, bg=theme["background"], highlightthickness=0
         )
         self.day_summary_canvas.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(SPACE_2, SPACE_3))
         self.day_summary_canvas.bind("<Configure>", lambda _event: self._draw_day_summary_card())
@@ -1390,16 +1577,16 @@ class ExpenseTrackerApp:
             self.details_frame,
             columns=("description", "amount", "account", "status"),
             show="headings",
-            height=14,
+            height=12,
         )
-        self.details_list.heading("description", text="DESCRIPTION")
-        self.details_list.heading("amount", text="AMOUNT")
-        self.details_list.heading("account", text="ACCOUNT")
-        self.details_list.heading("status", text="STATUS")
-        self.details_list.column("description", width=150, minwidth=110, anchor="w", stretch=True)
-        self.details_list.column("amount", width=80, minwidth=70, anchor="e", stretch=False)
-        self.details_list.column("account", width=85, minwidth=70, anchor="w", stretch=False)
-        self.details_list.column("status", width=80, minwidth=70, anchor="center", stretch=False)
+        self.details_list.heading("description", text="DESCRIPTION", anchor="w")
+        self.details_list.heading("amount", text="AMOUNT", anchor="e")
+        self.details_list.heading("account", text="ACCOUNT", anchor="w")
+        self.details_list.heading("status", text="STATUS", anchor="center")
+        self.details_list.column("description", width=140, minwidth=100, anchor="w", stretch=True)
+        self.details_list.column("amount", width=78, minwidth=66, anchor="e", stretch=False)
+        self.details_list.column("account", width=82, minwidth=66, anchor="w", stretch=False)
+        self.details_list.column("status", width=76, minwidth=66, anchor="center", stretch=False)
         self.details_list.grid(row=2, column=0, sticky="nsew")
 
         scrollbar = ttk.Scrollbar(self.details_frame, orient="vertical", command=self.details_list.yview)
@@ -1412,33 +1599,289 @@ class ExpenseTrackerApp:
         actions = tk.Frame(self.details_frame, bg=theme["background"])
         actions.grid(row=3, column=0, columnspan=2, sticky="e", pady=(SPACE_3, 0))
         self.paid_button = PillButton(
-            actions,
-            "Mark paid",
-            self.toggle_selected_paid,
-            theme,
-            variant="tonal",
-            glyph=ICON_PAID,
+            actions, "Mark paid", self.toggle_selected_paid, theme, variant="tonal", glyph=ICON_PAID
         )
         self.paid_button.grid(row=0, column=0, padx=(0, SPACE_2))
         self.edit_button = PillButton(
-            actions,
-            "Edit",
-            self.edit_selected_entry,
-            theme,
-            variant="tonal",
-            glyph=ICON_EDIT,
+            actions, "Edit", self.edit_selected_entry, theme, variant="tonal", glyph=ICON_EDIT
         )
         self.edit_button.grid(row=0, column=1, padx=(0, SPACE_2))
         self.delete_button = PillButton(
-            actions,
-            "Delete",
-            self.delete_selected_entry,
-            theme,
-            variant="outlined",
-            glyph=ICON_DELETE,
+            actions, "Delete", self.delete_selected_entry, theme, variant="outlined", glyph=ICON_DELETE
         )
         self.delete_button.grid(row=0, column=2)
         self.themed_buttons.extend([self.paid_button, self.edit_button, self.delete_button])
+
+    # --- statistics ---------------------------------------------------
+    def _build_statistics_view(self, theme: dict) -> None:
+        view = self._new_view("statistics", theme)
+        view.columnconfigure(0, weight=1)
+        view.rowconfigure(0, weight=3)
+        view.rowconfigure(1, weight=2)
+
+        self.trend_canvas = tk.Canvas(view, bg=theme["background"], highlightthickness=0)
+        self.trend_canvas.grid(row=0, column=0, sticky="nsew")
+        self.trend_canvas.bind("<Configure>", lambda _event: self._draw_trend_chart())
+
+        self.breakdown_canvas = tk.Canvas(view, bg=theme["background"], highlightthickness=0)
+        self.breakdown_canvas.grid(row=1, column=0, sticky="nsew", pady=(SPACE_4, 0))
+        self.breakdown_canvas.bind("<Configure>", lambda _event: self._draw_breakdown())
+
+
+    # ------------------------------------------------------------------
+    # Card drawing
+    # ------------------------------------------------------------------
+
+    def _draw_card(self, canvas: tk.Canvas, title: str, note: str = "") -> tuple:
+        """Paint an elevated card filling the canvas; return its content box."""
+        theme = self._theme()
+        canvas.configure(bg=theme["background"])
+        canvas.delete("all")
+        width = max(canvas.winfo_width(), 1)
+        height = max(canvas.winfo_height(), 1)
+        if width < 40 or height < 40:
+            return (0, 0, 0, 0)
+
+        x1, y1, x2, y2 = 2, 2, width - 3, height - 4
+        draw_elevation(canvas, x1, y1, x2, y2, RADIUS_CARD, theme["background"], theme["shadow"], level=1)
+        draw_rounded_rect(canvas, x1, y1, x2, y2, RADIUS_CARD, theme["surface"], theme["outline_variant"])
+
+        canvas.create_text(
+            x1 + SPACE_4, y1 + SPACE_4, text=title, anchor="nw",
+            fill=theme["text_muted"], font=text_font(8, bold=True),
+        )
+        if note:
+            canvas.create_text(
+                x2 - SPACE_4, y1 + SPACE_4, text=note, anchor="ne",
+                fill=theme["text_muted"], font=text_font(8),
+            )
+        return (x1 + SPACE_4, y1 + SPACE_4 + 22, x2 - SPACE_4, y2 - SPACE_3)
+
+    def _draw_brand(self) -> None:
+        if not hasattr(self, "brand_canvas"):
+            return
+        theme = self._theme()
+        canvas = self.brand_canvas
+        canvas.configure(bg=theme["surface_1"])
+        canvas.delete("all")
+        width = max(canvas.winfo_width(), 1)
+
+        initial = (self.authenticated_username or "?").strip()[:1].upper()
+        canvas.create_oval(SPACE_2, 14, SPACE_2 + 34, 48, fill=theme["accent_soft"], outline=theme["accent"])
+        canvas.create_text(
+            SPACE_2 + 17, 31, text=initial, fill=theme["accent"], font=text_font(13, bold=True)
+        )
+        canvas.create_text(
+            SPACE_2 + 44, 24, text=self._display_name(), anchor="w",
+            fill=theme["text"], font=text_font(11, bold=True),
+        )
+        canvas.create_text(
+            SPACE_2 + 44, 40, text="v" + APP_VERSION, anchor="w",
+            fill=theme["text_muted"], font=text_font(8),
+        )
+        canvas.create_line(
+            SPACE_2, 66, max(width - SPACE_2, SPACE_2), 66, fill=theme["outline_variant"]
+        )
+
+    def _draw_category_chart(self) -> None:
+        if not hasattr(self, "category_canvas"):
+            return
+        month_name = self.current_date.strftime("%B")
+        box = self._draw_card(self.category_canvas, "SPEND BY CATEGORY", month_name.upper())
+        if box == (0, 0, 0, 0):
+            return
+        theme = self._theme()
+        left, top, right, bottom = box
+        canvas = self.category_canvas
+
+        rows = get_category_totals(
+            self.expenses, self.current_date.year, self.current_date.month, self.account_filter.get()
+        )
+        if not rows:
+            canvas.create_text(
+                left, top + 8, text="Nothing due this month.", anchor="nw",
+                fill=theme["text_muted"], font=text_font(10),
+            )
+            return
+
+        largest = max(value for _name, value in rows) or 1.0
+        row_height = 34
+        visible = max(1, min(len(rows), int((bottom - top) // row_height)))
+        palette = CATEGORY_COLOURS
+
+        for index, (name, value) in enumerate(rows[:visible]):
+            y = top + 6 + index * row_height
+            colour = palette[index % len(palette)]
+            canvas.create_text(
+                left, y, text=name, anchor="nw", fill=theme["text"], font=text_font(9, bold=True)
+            )
+            canvas.create_text(
+                right, y, text=f"${value:,.2f}", anchor="ne",
+                fill=theme["text_secondary"], font=text_font(9),
+            )
+            track_top = y + 18
+            draw_rounded_rect(canvas, left, track_top, right, track_top + 7, 3, theme["surface_2"])
+            span = max(6, int((right - left) * (value / largest)))
+            draw_rounded_rect(canvas, left, track_top, left + span, track_top + 7, 3, colour)
+
+        if len(rows) > visible:
+            canvas.create_text(
+                left, bottom - 4, text=f"+{len(rows) - visible} more", anchor="sw",
+                fill=theme["text_muted"], font=text_font(8),
+            )
+
+    def _draw_upcoming(self) -> None:
+        if not hasattr(self, "upcoming_canvas"):
+            return
+        box = self._draw_card(self.upcoming_canvas, "COMING UP", "NEXT 14 DAYS")
+        if box == (0, 0, 0, 0):
+            return
+        theme = self._theme()
+        left, top, right, bottom = box
+        canvas = self.upcoming_canvas
+
+        today = date.today()
+        entries = get_upcoming(self.expenses, today, days=14, account=self.account_filter.get())
+        if not entries:
+            canvas.create_text(
+                left, top + 8, text="Nothing due in the next two weeks.", anchor="nw",
+                fill=theme["text_muted"], font=text_font(10),
+            )
+            return
+
+        row_height = 30
+        visible = max(1, min(len(entries), int((bottom - top) // row_height)))
+        for index, (day, expense) in enumerate(entries[:visible]):
+            y = top + 6 + index * row_height
+            delta = (day - today).days
+            if delta == 0:
+                when, when_colour = "Today", theme["accent"]
+            elif delta == 1:
+                when, when_colour = "Tomorrow", theme["text_secondary"]
+            else:
+                when, when_colour = day.strftime("%a %d %b"), theme["text_secondary"]
+
+            colour = expense.color or theme["accent"]
+            canvas.create_rectangle(left, y + 2, left + 3, y + 17, fill=colour, outline="")
+            canvas.create_text(
+                left + 10, y, text=expense.description, anchor="nw",
+                fill=theme["text"], font=text_font(9, bold=True),
+            )
+            canvas.create_text(
+                left + 10, y + 14, text=when, anchor="nw", fill=when_colour, font=text_font(8)
+            )
+            if expense.amount is not None:
+                canvas.create_text(
+                    right, y + 5, text=f"${expense.amount:,.2f}", anchor="ne",
+                    fill=theme["text"], font=text_font(9),
+                )
+
+        if len(entries) > visible:
+            canvas.create_text(
+                left, bottom - 4, text=f"+{len(entries) - visible} more", anchor="sw",
+                fill=theme["text_muted"], font=text_font(8),
+            )
+
+    def _draw_trend_chart(self, canvas: tk.Canvas | None = None) -> None:
+        canvas = canvas if canvas is not None else getattr(self, "trend_canvas", None)
+        if canvas is None:
+            return
+        year = self.current_date.year
+        box = self._draw_card(canvas, "MONTHLY SPEND", str(year))
+        if box == (0, 0, 0, 0):
+            return
+        theme = self._theme()
+        left, top, right, bottom = box
+
+        totals = get_monthly_totals(self.expenses, year, self.account_filter.get())
+        largest = max(totals) or 1.0
+        baseline = bottom - 20
+        usable = max(20, baseline - top - 28)
+        slot = (right - left) / 12.0
+        bar_width = max(8, int(slot * 0.52))
+
+        for index, value in enumerate(totals):
+            centre = left + slot * (index + 0.5)
+            height = int(usable * (value / largest)) if value else 0
+            x1 = int(centre - bar_width / 2)
+            x2 = int(centre + bar_width / 2)
+            is_current = (index + 1) == self.current_date.month
+            colour = theme["accent"] if is_current else mix(theme["surface"], theme["accent"], 0.34)
+            if height > 0:
+                draw_rounded_rect(canvas, x1, baseline - height, x2, baseline, 4, colour)
+            else:
+                canvas.create_line(x1, baseline - 1, x2, baseline - 1, fill=theme["outline"])
+
+            canvas.create_text(
+                centre, baseline + 6, text=calendar.month_abbr[index + 1][:1],
+                anchor="n", fill=theme["accent"] if is_current else theme["text_muted"],
+                font=text_font(8, bold=is_current),
+            )
+            if is_current and value:
+                canvas.create_text(
+                    centre, baseline - height - 4, text=f"${value:,.0f}", anchor="s",
+                    fill=theme["text"], font=text_font(8, bold=True),
+                )
+
+    def _draw_breakdown(self) -> None:
+        if not hasattr(self, "breakdown_canvas"):
+            return
+        year = self.current_date.year
+        box = self._draw_card(self.breakdown_canvas, "SHARE OF SPENDING", f"{year} TOTAL")
+        if box == (0, 0, 0, 0):
+            return
+        theme = self._theme()
+        left, top, right, bottom = box
+        canvas = self.breakdown_canvas
+
+        yearly: dict = {}
+        for month in range(1, 13):
+            for name, value in get_category_totals(self.expenses, year, month, self.account_filter.get()):
+                yearly[name] = yearly.get(name, 0.0) + value
+        rows = sorted(yearly.items(), key=lambda item: -item[1])
+        total = sum(value for _name, value in rows)
+
+        if not rows or total <= 0:
+            canvas.create_text(
+                left, top + 8, text="No spending recorded for this year yet.", anchor="nw",
+                fill=theme["text_muted"], font=text_font(10),
+            )
+            return
+
+        # A single stacked bar, then a legend beneath it.
+        bar_top = top + 6
+        bar_bottom = bar_top + 22
+        cursor = left
+        for index, (_name, value) in enumerate(rows):
+            span = int((right - left) * (value / total))
+            if index == len(rows) - 1:
+                span = right - cursor
+            if span <= 0:
+                continue
+            canvas.create_rectangle(
+                cursor, bar_top, cursor + span, bar_bottom,
+                fill=CATEGORY_COLOURS[index % len(CATEGORY_COLOURS)], outline="",
+            )
+            cursor += span
+
+        legend_y = bar_bottom + 14
+        column_width = max(150, int((right - left) / 3))
+        for index, (name, value) in enumerate(rows[:9]):
+            column = index % 3
+            row = index // 3
+            x = left + column * column_width
+            y = legend_y + row * 22
+            if y > bottom - 10:
+                break
+            canvas.create_rectangle(
+                x, y + 3, x + 9, y + 12,
+                fill=CATEGORY_COLOURS[index % len(CATEGORY_COLOURS)], outline="",
+            )
+            share = value / total * 100
+            canvas.create_text(
+                x + 15, y, text=f"{name}  {share:.0f}%", anchor="nw",
+                fill=theme["text_secondary"], font=text_font(8),
+            )
 
     def _available_accounts(self) -> list[str]:
         accounts = ["All accounts", "Main", "Spouse", "Shared"]
@@ -1529,25 +1972,54 @@ class ExpenseTrackerApp:
             f"{len(day_expenses)} {entry_word}  ·  ${day_total:,.2f} due  ·  ${day_paid:,.2f} paid"
         )
         self.selected_day_label.config(text=self.selected_date.strftime("%A, %B %d"))
+        self.subtitle_label.config(text=self._welcome_text())
         self._apply_color_pallets()
-        self._draw_welcome_card()
+
+        self._draw_brand()
         self._draw_stat_cards()
+        self._draw_category_chart()
+        self._draw_upcoming()
+        self._draw_trend_chart()
+        if hasattr(self, "dash_trend_canvas"):
+            self._draw_trend_chart(self.dash_trend_canvas)
+        self._draw_breakdown()
         self._draw_day_summary_card()
 
+        self.populate_all_list()
         self.populate_calendar()
         self.populate_details()
 
     def _apply_color_pallets(self) -> None:
+        """Repaint plain container frames after a theme change.
+
+        The sidebar sits on a raised surface rather than the page background, so
+        its subtree is skipped; repainting it would flatten the rail into the
+        rest of the window.
+        """
         theme = self._theme()
         self.root.configure(bg=theme["background"])
+        sidebar = getattr(self, "sidebar", None)
 
-        def recolor_containers(widget) -> None:
+        def recolor_containers(widget, background) -> None:
             for child in widget.winfo_children():
                 if isinstance(child, tk.Frame):
-                    child.configure(bg=theme["background"])
-                recolor_containers(child)
+                    child.configure(bg=background)
+                recolor_containers(child, background)
 
-        recolor_containers(self.root)
+        if sidebar is not None:
+            sidebar.configure(bg=theme["surface_1"])
+            recolor_containers(sidebar, theme["surface_1"])
+            for item in self.nav_items.values():
+                item.set_theme(theme, theme["surface_1"])
+            if hasattr(self, "theme_button"):
+                self.theme_button.set_theme(theme, theme["surface_1"])
+
+        for child in self.root.winfo_children():
+            if child is sidebar:
+                continue
+            if isinstance(child, tk.Frame):
+                child.configure(bg=theme["background"])
+            recolor_containers(child, theme["background"])
 
     def _render_calendar_cell(
         self,
@@ -1902,6 +2374,79 @@ class ExpenseTrackerApp:
         )
         dialog.grab_set()
         self.root.wait_window(dialog)
+
+    # --- the Subscriptions view ---------------------------------------
+
+    CADENCE_LABELS = {
+        CADENCE_ONCE: "Once",
+        CADENCE_WEEKLY: "Weekly",
+        CADENCE_MONTHLY: "Monthly",
+        CADENCE_QUARTERLY: "Quarterly",
+        CADENCE_YEARLY: "Yearly",
+    }
+
+    def populate_all_list(self) -> None:
+        """Every subscription, regardless of month, newest billing date first."""
+        if not hasattr(self, "all_list"):
+            return
+        for row_id in self.all_list.get_children():
+            self.all_list.delete(row_id)
+
+        account = self.account_filter.get()
+        today = date.today()
+        rows = []
+        for expense in self.expenses:
+            if account and account != "All accounts" and expense.account != account:
+                continue
+            following = next_occurrence(expense, today)
+            rows.append((following, expense))
+
+        # Anything still running sorts first, by how soon it is due; finished
+        # subscriptions fall to the bottom in alphabetical order.
+        rows.sort(key=lambda pair: (pair[0] is None, pair[0] or date.max, pair[1].description.lower()))
+
+        for following, expense in rows:
+            amount = "Planned" if expense.amount is None else f"${expense.amount:,.2f}"
+            cadence = self.CADENCE_LABELS.get(expense.cadence, expense.cadence.title())
+            if following is None:
+                due = "Ended"
+            elif following == today:
+                due = "Today"
+            else:
+                due = following.strftime("%d %b %Y")
+            self.all_list.insert(
+                "",
+                "end",
+                iid=expense.id,
+                values=(expense.description, amount, cadence, due, expense.account, expense.category),
+            )
+
+    def _selected_from_all_list(self):
+        selection = self.all_list.selection()
+        if not selection:
+            return None
+        return next((item for item in self.expenses if item.id == selection[0]), None)
+
+    def edit_from_all_list(self, _event=None) -> None:
+        expense = self._selected_from_all_list()
+        if expense is None:
+            messagebox.showinfo("Nothing selected", "Select a subscription in the list first.")
+            return
+        self._open_edit_dialog(expense)
+
+    def delete_from_all_list(self, _event=None) -> None:
+        expense = self._selected_from_all_list()
+        if expense is None:
+            messagebox.showinfo("Nothing selected", "Select a subscription in the list first.")
+            return
+        confirmed = messagebox.askyesno(
+            "Delete subscription",
+            f"Delete '{expense.description}'?\n\nThis also removes every month you marked it paid.",
+        )
+        if not confirmed:
+            return
+        delete_expense(self.data_file, expense.id)
+        self.refresh_view()
 
     def _selected_expense(self):
         selection = self.details_list.selection()

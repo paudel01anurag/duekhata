@@ -13,9 +13,12 @@ from expense_tracker import (
     add_expense,
     create_expense,
     create_schema,
+    get_category_totals,
     get_expenses_by_day,
     get_expenses_for_day,
     get_expenses_for_month,
+    get_monthly_totals,
+    next_occurrence,
     get_paid_expense_ids,
     get_paid_total_for_month,
     get_total_for_month,
@@ -275,6 +278,82 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(stored["Netflix"].cadence, CADENCE_MONTHLY)
         self.assertEqual(stored["Laptop"].cadence, CADENCE_ONCE)
         self.assertIsNone(stored["Laptop"].ends_on)
+
+
+class CategoryAndTrendTests(unittest.TestCase):
+    def _sample(self):
+        return [
+            create_expense("Netflix", 10.0, "2026-01-05", "Main", "Streaming",
+                           cadence=CADENCE_MONTHLY, due_day=5),
+            create_expense("Disney", 5.0, "2026-01-08", "Main", "Streaming",
+                           cadence=CADENCE_MONTHLY, due_day=8),
+            create_expense("Gym", 40.0, "2026-01-12", "Main", "Health",
+                           cadence=CADENCE_MONTHLY, due_day=12),
+            create_expense("Coffee", 3.0, "2026-08-03", "Main", "Food",
+                           cadence=CADENCE_WEEKLY),
+        ]
+
+    def test_categories_are_summed_and_ranked_by_size(self):
+        totals = get_category_totals(self._sample(), 2026, 8)
+        names = [name for name, _ in totals]
+        self.assertEqual(names[0], "Health")
+        self.assertEqual(dict(totals)["Streaming"], 15.0)
+
+    def test_weekly_subscription_counts_every_occurrence(self):
+        # August 2026 has five Mondays from the 3rd, so a weekly $3 item is $15.
+        totals = dict(get_category_totals(self._sample(), 2026, 8))
+        self.assertEqual(totals["Food"], 15.0)
+
+    def test_category_totals_respect_the_account_filter(self):
+        expenses = self._sample() + [
+            create_expense("Shared streaming", 99.0, "2026-01-01", "Spouse", "Streaming",
+                           cadence=CADENCE_MONTHLY, due_day=1),
+        ]
+        totals = dict(get_category_totals(expenses, 2026, 8, account="Spouse"))
+        self.assertEqual(totals, {"Streaming": 99.0})
+
+    def test_expenses_without_an_amount_are_skipped(self):
+        expenses = [create_expense("Planned", None, "2026-08-04", "Main", "Other")]
+        self.assertEqual(get_category_totals(expenses, 2026, 8), [])
+
+    def test_monthly_totals_returns_twelve_values_january_first(self):
+        totals = get_monthly_totals(self._sample(), 2026)
+        self.assertEqual(len(totals), 12)
+        # Nothing starts before January, and the three monthly items total $55.
+        self.assertEqual(totals[0], 55.0)
+
+    def test_monthly_totals_are_empty_before_anything_starts(self):
+        expenses = [create_expense("Later", 20.0, "2026-06-01", "Main", "Other",
+                                   cadence=CADENCE_MONTHLY, due_day=1)]
+        totals = get_monthly_totals(expenses, 2026)
+        self.assertEqual(totals[:5], [0.0, 0.0, 0.0, 0.0, 0.0])
+        self.assertEqual(totals[5], 20.0)
+
+
+class NextOccurrenceTests(unittest.TestCase):
+    def test_finds_the_next_monthly_billing_day(self):
+        expense = create_expense("Netflix", 10.0, "2026-01-10", "Main", "Streaming",
+                                 cadence=CADENCE_MONTHLY, due_day=10)
+        self.assertEqual(next_occurrence(expense, date(2026, 8, 3)), date(2026, 8, 10))
+
+    def test_a_billing_day_today_counts_as_next(self):
+        expense = create_expense("Netflix", 10.0, "2026-01-10", "Main", "Streaming",
+                                 cadence=CADENCE_MONTHLY, due_day=10)
+        self.assertEqual(next_occurrence(expense, date(2026, 8, 10)), date(2026, 8, 10))
+
+    def test_returns_none_once_the_end_date_has_passed(self):
+        expense = create_expense("Cancelled", 10.0, "2026-01-10", "Main", "Streaming",
+                                 cadence=CADENCE_MONTHLY, due_day=10, ends_on="2026-05-10")
+        self.assertIsNone(next_occurrence(expense, date(2026, 8, 1)))
+
+    def test_returns_none_for_a_one_off_already_past(self):
+        expense = create_expense("Laptop", 900.0, "2026-02-02", "Main", "Other")
+        self.assertIsNone(next_occurrence(expense, date(2026, 8, 1)))
+
+    def test_finds_an_annual_renewal_far_ahead(self):
+        expense = create_expense("Domain", 18.0, "2026-01-14", "Main", "Software",
+                                 cadence=CADENCE_YEARLY, due_day=14)
+        self.assertEqual(next_occurrence(expense, date(2026, 8, 1)), date(2027, 1, 14))
 
 
 if __name__ == "__main__":

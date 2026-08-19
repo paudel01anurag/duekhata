@@ -602,6 +602,49 @@ def get_yearly_total(expenses: List[Expense], year: int, account: Optional[str] 
     return round(sum(get_total_for_month(expenses, year, month, account) for month in range(1, 13)), 2)
 
 
+def next_occurrence(expense: Expense, start: date, horizon_days: int = 800):
+    """The first day on or after `start` that this subscription bills.
+
+    Returns None when nothing is left, which is the case for a one-off already in
+    the past or a subscription whose end date has gone by. The horizon covers
+    slightly over two years so that an annual renewal is always found.
+    """
+    end = _parse_iso(expense.ends_on)
+    for offset in range(horizon_days + 1):
+        day = start + timedelta(days=offset)
+        if end is not None and day > end:
+            return None
+        if occurs_on(expense, day):
+            return day
+    return None
+
+
+def get_category_totals(
+    expenses: List[Expense], year: int, month: int, account: Optional[str] = None
+) -> List[tuple]:
+    """Spend per category for one month, largest first.
+
+    Uses the same occurrence counting as get_total_for_month, so a weekly
+    subscription contributes every time it falls due rather than once.
+    """
+    totals: dict = {}
+    for expense in get_expenses_for_month(expenses, year, month, account):
+        if expense.amount is None:
+            continue
+        occurrences = len(occurrences_in_month(expense, year, month))
+        name = expense.category or "Uncategorised"
+        totals[name] = totals.get(name, 0.0) + expense.amount * occurrences
+
+    ranked = [(name, round(value, 2)) for name, value in totals.items()]
+    ranked.sort(key=lambda item: (-item[1], item[0].lower()))
+    return ranked
+
+
+def get_monthly_totals(expenses: List[Expense], year: int, account: Optional[str] = None) -> List[float]:
+    """Twelve monthly totals for `year`, January first."""
+    return [get_total_for_month(expenses, year, month, account) for month in range(1, 13)]
+
+
 def get_paid_expense_ids(data_file: Path, year: int, month: int, account: Optional[str] = None) -> Set[str]:
     if data_file.suffix.lower() == ".json":
         return set()
