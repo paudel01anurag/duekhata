@@ -23,6 +23,7 @@ from expense_tracker import (
     CADENCE_YEARLY,
     next_occurrence,
     get_category_totals,
+    get_totals_by,
     get_monthly_totals,
     get_upcoming,
     CADENCE_LABELS,
@@ -221,6 +222,10 @@ ICON_FALLBACK = {
 SPACE_1, SPACE_2, SPACE_3, SPACE_4, SPACE_5, SPACE_6 = 4, 8, 12, 16, 20, 24
 
 NAV_WIDTH = 196
+DETAILS_WIDTH = 372
+
+ALL_CATEGORIES = "All categories"
+ALL_CADENCES = "Any"
 
 # Chart colours, warm-leaning so they sit with the palette rather than fight it.
 CATEGORY_COLOURS = (
@@ -735,6 +740,92 @@ class PillButton(_StatefulCanvasButton):
         self.create_text(text_x, height // 2, text=self.text, fill=foreground, font=text_font(10, bold=True))
 
 
+class SegmentedControl(tk.Canvas):
+    """A small row of mutually exclusive options, drawn as one pill."""
+
+    def __init__(self, master: tk.Misc, options: tuple, command, theme: dict, height: int = 30) -> None:
+        super().__init__(master, height=height, highlightthickness=0, bd=0, takefocus=0)
+        self.options = options
+        self.command = command
+        self.theme = theme
+        self.surface = theme["background"]
+        self.height = height
+        self.selected = options[0][0] if options else ""
+        self._hovered = None
+        self._font = tkfont.Font(master, font=text_font(9, bold=True))
+        self._bounds: list = []
+        self.configure(bg=self.surface, cursor="hand2")
+        self.bind("<Button-1>", self._on_click)
+        self.bind("<Motion>", self._on_motion)
+        self.bind("<Leave>", lambda _event: self._set_hover(None))
+        self._resize()
+        self.redraw()
+
+    def _resize(self) -> None:
+        width = SPACE_1
+        for _key, label in self.options:
+            width += self._font.measure(label) + SPACE_5
+        self.configure(width=width + SPACE_1)
+
+    def set_theme(self, theme: dict, surface: str | None = None) -> None:
+        self.theme = theme
+        self.surface = surface or theme["background"]
+        self.configure(bg=self.surface)
+        self.redraw()
+
+    def set_selected(self, key: str) -> None:
+        self.selected = key
+        self.redraw()
+
+    def _hit(self, x: int):
+        for key, x1, x2 in self._bounds:
+            if x1 <= x <= x2:
+                return key
+        return None
+
+    def _set_hover(self, key) -> None:
+        if key != self._hovered:
+            self._hovered = key
+            self.redraw()
+
+    def _on_motion(self, event) -> None:
+        self._set_hover(self._hit(event.x))
+
+    def _on_click(self, event) -> None:
+        key = self._hit(event.x)
+        if key and key != self.selected:
+            self.selected = key
+            self.redraw()
+            if self.command:
+                self.command(key)
+
+    def redraw(self) -> None:
+        self.delete("all")
+        theme = self.theme
+        width = max(self.winfo_reqwidth(), 1)
+        height = self.height
+        draw_rounded_rect(self, 0, 0, width - 1, height - 1, height // 2, theme["surface_2"])
+
+        self._bounds = []
+        x = SPACE_1
+        for key, label in self.options:
+            segment = self._font.measure(label) + SPACE_5
+            if key == self.selected:
+                draw_rounded_rect(
+                    self, x, 3, x + segment, height - 4, (height - 7) // 2, theme["surface"]
+                )
+                colour = theme["accent"]
+            elif key == self._hovered:
+                colour = theme["text"]
+            else:
+                colour = theme["text_muted"]
+            self.create_text(
+                x + segment // 2, height // 2, text=label, fill=colour, font=text_font(9, bold=True)
+            )
+            self._bounds.append((key, x, x + segment))
+            x += segment
+
+
 class NavItem(_StatefulCanvasButton):
     """One row in the sidebar. Reads as a pill when it is the active view."""
 
@@ -1085,8 +1176,8 @@ class ExpenseTrackerApp:
     def __init__(self, root: tk.Tk, data_file: Path, username: str | None = None) -> None:
         self.root = root
         self.root.title(APP_NAME)
-        self.root.geometry("1180x800")
-        self.root.minsize(1020, 700)
+        self.root.geometry("1360x880")
+        self.root.minsize(1120, 740)
         self.root.configure(bg=WARM_LIGHT["background"])
 
         self.data_file = data_file
@@ -1101,6 +1192,8 @@ class ExpenseTrackerApp:
         resolve_fonts(self.root)
         self.calendar_font = tkfont.Font(self.root, font=text_font(8))
         self.themed_buttons: list[_StatefulCanvasButton] = []
+        self.group_field = "category"
+        self.chart_style = "donut"
         self.stat_values = {"projected": 0.0, "remaining": 0.0, "paid": 0.0, "yearly": 0.0}
         self._apply_theme()
 
@@ -1524,7 +1617,45 @@ class ExpenseTrackerApp:
     def _build_subscriptions_view(self, theme: dict) -> None:
         view = self._new_view("subscriptions", theme)
         view.columnconfigure(0, weight=1)
-        view.rowconfigure(0, weight=1)
+        view.rowconfigure(1, weight=1)
+
+        filters = tk.Frame(view, bg=theme["background"])
+        filters.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, SPACE_3))
+        filters.columnconfigure(5, weight=1)
+
+        ttk.Label(filters, text="Search", style="Muted.TLabel").grid(row=0, column=0, padx=(0, SPACE_2))
+        self.search_var = tk.StringVar()
+        self.search_var.trace_add("write", lambda *_args: self.populate_all_list())
+        search_entry = tk.Entry(
+            filters, textvariable=self.search_var, width=22,
+            bg=theme["surface"], fg=theme["text"], font=text_font(10),
+            insertbackground=theme["input_cursor"], relief="flat",
+            highlightthickness=1, highlightbackground=theme["outline"],
+            highlightcolor=theme["accent"],
+        )
+        search_entry.grid(row=0, column=1, padx=(0, SPACE_4), ipady=5)
+
+        ttk.Label(filters, text="Category", style="Muted.TLabel").grid(row=0, column=2, padx=(0, SPACE_2))
+        self.category_filter = tk.StringVar(value=ALL_CATEGORIES)
+        self.category_box = ttk.Combobox(
+            filters, textvariable=self.category_filter, state="readonly",
+            width=15, font=text_font(10),
+        )
+        self.category_box.grid(row=0, column=3, padx=(0, SPACE_4))
+        self.category_box.bind("<<ComboboxSelected>>", lambda _event: self.populate_all_list())
+
+        ttk.Label(filters, text="Repeats", style="Muted.TLabel").grid(row=0, column=4, padx=(0, SPACE_2))
+        self.cadence_filter = tk.StringVar(value=ALL_CADENCES)
+        cadence_box = ttk.Combobox(
+            filters, textvariable=self.cadence_filter, state="readonly",
+            width=12, font=text_font(10),
+            values=(ALL_CADENCES,) + tuple(self.CADENCE_LABELS.values()),
+        )
+        cadence_box.grid(row=0, column=5, sticky="w")
+        cadence_box.bind("<<ComboboxSelected>>", lambda _event: self.populate_all_list())
+
+        self.result_label = ttk.Label(filters, text="", style="Muted.TLabel")
+        self.result_label.grid(row=0, column=6, sticky="e")
 
         self.all_list = ttk.Treeview(
             view,
@@ -1542,15 +1673,15 @@ class ExpenseTrackerApp:
         for key, title, width, anchor, stretch in headings:
             self.all_list.heading(key, text=title, anchor=anchor)
             self.all_list.column(key, width=width, minwidth=70, anchor=anchor, stretch=stretch)
-        self.all_list.grid(row=0, column=0, sticky="nsew")
+        self.all_list.grid(row=1, column=0, sticky="nsew")
 
         scrollbar = ttk.Scrollbar(view, orient="vertical", command=self.all_list.yview)
-        scrollbar.grid(row=0, column=1, sticky="ns")
+        scrollbar.grid(row=1, column=1, sticky="ns")
         self.all_list.configure(yscrollcommand=scrollbar.set)
         self.all_list.bind("<Double-1>", self.edit_from_all_list)
 
         actions = tk.Frame(view, bg=theme["background"])
-        actions.grid(row=1, column=0, columnspan=2, sticky="e", pady=(SPACE_3, 0))
+        actions.grid(row=2, column=0, columnspan=2, sticky="e", pady=(SPACE_3, 0))
         self.all_edit_button = PillButton(
             actions, "Edit", self.edit_from_all_list, theme, variant="tonal", glyph=ICON_EDIT
         )
@@ -1564,8 +1695,11 @@ class ExpenseTrackerApp:
     # --- calendar -----------------------------------------------------
     def _build_calendar_view(self, theme: dict) -> None:
         view = self._new_view("calendar", theme)
-        view.columnconfigure(0, weight=3)
-        view.columnconfigure(1, weight=2)
+        # The day list does not benefit from extra width, so it keeps a fixed
+        # size and every spare pixel goes to the calendar, where it buys
+        # readable subscription names instead of truncated ones.
+        view.columnconfigure(0, weight=1)
+        view.columnconfigure(1, weight=0, minsize=DETAILS_WIDTH)
         view.rowconfigure(1, weight=1)
 
         monthbar = tk.Frame(view, bg=theme["background"])
@@ -1592,7 +1726,7 @@ class ExpenseTrackerApp:
         # column, which inflates the frame's requested width and steals space from
         # the calendar every time the layout is recalculated. Pinning the frame's
         # own size stops that feedback loop from reaching the parent grid.
-        self.details_frame = ttk.Frame(view, width=400)
+        self.details_frame = ttk.Frame(view, width=DETAILS_WIDTH)
         self.details_frame.grid(row=1, column=1, sticky="nsew")
         self.details_frame.grid_propagate(False)
         self.details_frame.columnconfigure(0, weight=1)
@@ -1617,10 +1751,12 @@ class ExpenseTrackerApp:
         self.details_list.heading("amount", text="AMOUNT", anchor="e")
         self.details_list.heading("account", text="ACCOUNT", anchor="w")
         self.details_list.heading("status", text="STATUS", anchor="center")
-        self.details_list.column("description", width=140, minwidth=100, anchor="w", stretch=True)
-        self.details_list.column("amount", width=78, minwidth=66, anchor="e", stretch=False)
-        self.details_list.column("account", width=82, minwidth=66, anchor="w", stretch=False)
-        self.details_list.column("status", width=76, minwidth=66, anchor="center", stretch=False)
+        # These must total less than DETAILS_WIDTH minus the scrollbar, or the
+        # last column is clipped off the edge of the panel.
+        self.details_list.column("description", width=118, minwidth=90, anchor="w", stretch=True)
+        self.details_list.column("amount", width=72, minwidth=64, anchor="e", stretch=False)
+        self.details_list.column("account", width=74, minwidth=62, anchor="w", stretch=False)
+        self.details_list.column("status", width=68, minwidth=60, anchor="center", stretch=False)
         self.details_list.grid(row=2, column=0, sticky="nsew")
 
         scrollbar = ttk.Scrollbar(self.details_frame, orient="vertical", command=self.details_list.yview)
@@ -1650,15 +1786,36 @@ class ExpenseTrackerApp:
     def _build_statistics_view(self, theme: dict) -> None:
         view = self._new_view("statistics", theme)
         view.columnconfigure(0, weight=1)
-        view.rowconfigure(0, weight=3)
-        view.rowconfigure(1, weight=2)
+        view.rowconfigure(1, weight=3)
+        view.rowconfigure(2, weight=2)
+
+        controls = tk.Frame(view, bg=theme["background"])
+        controls.grid(row=0, column=0, sticky="ew", pady=(0, SPACE_3))
+        controls.columnconfigure(2, weight=1)
+
+        self.group_control = SegmentedControl(
+            controls,
+            (("category", "By category"), ("account", "By account")),
+            self._set_group_field,
+            theme,
+        )
+        self.group_control.grid(row=0, column=0, padx=(0, SPACE_3))
+
+        self.style_control = SegmentedControl(
+            controls,
+            (("donut", "Donut"), ("bars", "Bars")),
+            self._set_chart_style,
+            theme,
+        )
+        self.style_control.grid(row=0, column=1, sticky="w")
+        self.themed_buttons.extend([self.group_control, self.style_control])
 
         self.trend_canvas = tk.Canvas(view, bg=theme["background"], highlightthickness=0)
-        self.trend_canvas.grid(row=0, column=0, sticky="nsew")
+        self.trend_canvas.grid(row=1, column=0, sticky="nsew")
         self.trend_canvas.bind("<Configure>", lambda _event: self._draw_trend_chart())
 
         self.breakdown_canvas = tk.Canvas(view, bg=theme["background"], highlightthickness=0)
-        self.breakdown_canvas.grid(row=1, column=0, sticky="nsew", pady=(SPACE_4, 0))
+        self.breakdown_canvas.grid(row=2, column=0, sticky="nsew", pady=(SPACE_4, 0))
         self.breakdown_canvas.bind("<Configure>", lambda _event: self._draw_breakdown())
 
 
@@ -1905,10 +2062,12 @@ class ExpenseTrackerApp:
                 )
 
     def _draw_breakdown(self) -> None:
+        """Share of the year's spending, as a donut or as ranked bars."""
         if not hasattr(self, "breakdown_canvas"):
             return
         year = self.current_date.year
-        box = self._draw_card(self.breakdown_canvas, "SHARE OF SPENDING", f"{year} TOTAL")
+        heading = "SHARE BY " + ("CATEGORY" if self.group_field == "category" else "ACCOUNT")
+        box = self._draw_card(self.breakdown_canvas, heading, f"{year} TOTAL")
         if box == (0, 0, 0, 0):
             return
         theme = self._theme()
@@ -1917,7 +2076,9 @@ class ExpenseTrackerApp:
 
         yearly: dict = {}
         for month in range(1, 13):
-            for name, value in get_category_totals(self.expenses, year, month, self.account_filter.get()):
+            for name, value in get_totals_by(
+                self.expenses, year, month, self.group_field, self.account_filter.get()
+            ):
                 yearly[name] = yearly.get(name, 0.0) + value
         rows = sorted(yearly.items(), key=lambda item: -item[1])
         total = sum(value for _name, value in rows)
@@ -1929,40 +2090,95 @@ class ExpenseTrackerApp:
             )
             return
 
-        # A single stacked bar, then a legend beneath it.
-        bar_top = top + 6
-        bar_bottom = bar_top + 22
-        cursor = left
-        for index, (_name, value) in enumerate(rows):
-            span = int((right - left) * (value / total))
-            if index == len(rows) - 1:
-                span = right - cursor
-            if span <= 0:
-                continue
-            canvas.create_rectangle(
-                cursor, bar_top, cursor + span, bar_bottom,
-                fill=CATEGORY_COLOURS[index % len(CATEGORY_COLOURS)], outline="",
-            )
-            cursor += span
+        if self.chart_style == "donut":
+            self._draw_donut(canvas, rows, total, left, top, right, bottom)
+        else:
+            self._draw_ranked_bars(canvas, rows, total, left, top, right, bottom)
 
-        legend_y = bar_bottom + 14
-        column_width = max(150, int((right - left) / 3))
-        for index, (name, value) in enumerate(rows[:9]):
-            column = index % 3
-            row = index // 3
-            x = left + column * column_width
-            y = legend_y + row * 22
-            if y > bottom - 10:
+    def _draw_donut(self, canvas, rows, total, left, top, right, bottom) -> None:
+        theme = self._theme()
+        size = max(80, min(bottom - top - 8, 224))
+        cx = left + size // 2
+        cy = top + (bottom - top) // 2
+        radius = size // 2
+
+        start = 90.0
+        for index, (_name, value) in enumerate(rows):
+            extent = -(value / total) * 360.0
+            if abs(extent) < 0.2:
+                continue
+            canvas.create_arc(
+                cx - radius, cy - radius, cx + radius, cy + radius,
+                start=start, extent=extent, style="pieslice",
+                fill=CATEGORY_COLOURS[index % len(CATEGORY_COLOURS)], outline=theme["surface"],
+            )
+            start += extent
+
+        # The hole is what makes it a donut, and gives the total somewhere to live.
+        hole = int(radius * 0.58)
+        canvas.create_oval(cx - hole, cy - hole, cx + hole, cy + hole, fill=theme["surface"], outline="")
+        canvas.create_text(cx, cy - 8, text=f"${total:,.0f}", fill=theme["text"], font=display_font(15))
+        canvas.create_text(cx, cy + 10, text="THIS YEAR", fill=theme["text_muted"], font=text_font(7, bold=True))
+
+        # Keep the legend as one block beside the donut. Pinning the figures to
+        # the card edge instead leaves a gulf of empty space on a wide window.
+        legend_x = cx + radius + SPACE_6
+        legend_right = min(right, legend_x + 300)
+        for index, (name, value) in enumerate(rows[:8]):
+            y = top + 6 + index * 21
+            if y > bottom - 12:
                 break
             canvas.create_rectangle(
-                x, y + 3, x + 9, y + 12,
+                legend_x, y + 3, legend_x + 9, y + 12,
                 fill=CATEGORY_COLOURS[index % len(CATEGORY_COLOURS)], outline="",
             )
-            share = value / total * 100
             canvas.create_text(
-                x + 15, y, text=f"{name}  {share:.0f}%", anchor="nw",
-                fill=theme["text_secondary"], font=text_font(8),
+                legend_x + 16, y, text=name, anchor="nw",
+                fill=theme["text_secondary"], font=text_font(9),
             )
+            canvas.create_text(
+                legend_right, y, text=f"{value / total * 100:.0f}%   ${value:,.0f}", anchor="ne",
+                fill=theme["text"], font=text_font(9),
+            )
+
+    def _draw_ranked_bars(self, canvas, rows, total, left, top, right, bottom) -> None:
+        theme = self._theme()
+        largest = max(value for _name, value in rows) or 1.0
+        row_height = 34
+        visible = max(1, min(len(rows), int((bottom - top) // row_height)))
+
+        for index, (name, value) in enumerate(rows[:visible]):
+            y = top + 6 + index * row_height
+            colour = CATEGORY_COLOURS[index % len(CATEGORY_COLOURS)]
+            canvas.create_text(
+                left, y, text=name, anchor="nw", fill=theme["text"], font=text_font(9, bold=True)
+            )
+            canvas.create_text(
+                right, y, text=f"{value / total * 100:.0f}%   ${value:,.2f}", anchor="ne",
+                fill=theme["text_secondary"], font=text_font(9),
+            )
+            track_top = y + 18
+            draw_rounded_rect(canvas, left, track_top, right, track_top + 7, 3, theme["surface_2"])
+            span = max(6, int((right - left) * (value / largest)))
+            draw_rounded_rect(canvas, left, track_top, left + span, track_top + 7, 3, colour)
+
+        if len(rows) > visible:
+            canvas.create_text(
+                left, bottom - 4, text=f"+{len(rows) - visible} more", anchor="sw",
+                fill=theme["text_muted"], font=text_font(8),
+            )
+
+
+    def _available_categories(self) -> list[str]:
+        return sorted({expense.category for expense in self.expenses if expense.category})
+
+    def _set_group_field(self, field: str) -> None:
+        self.group_field = field
+        self._draw_breakdown()
+
+    def _set_chart_style(self, style: str) -> None:
+        self.chart_style = style
+        self._draw_breakdown()
 
     def _available_accounts(self) -> list[str]:
         accounts = ["All accounts", "Main", "Spouse", "Shared"]
@@ -2475,10 +2691,27 @@ class ExpenseTrackerApp:
             self.all_list.delete(row_id)
 
         account = self.account_filter.get()
+        search = self.search_var.get().strip().lower()
+        wanted_category = self.category_filter.get()
+        wanted_cadence = self.cadence_filter.get()
         today = date.today()
+
+        self.category_box["values"] = (ALL_CATEGORIES,) + tuple(self._available_categories())
+        if wanted_category not in self.category_box["values"]:
+            wanted_category = ALL_CATEGORIES
+            self.category_filter.set(wanted_category)
+
         rows = []
         for expense in self.expenses:
             if account and account != "All accounts" and expense.account != account:
+                continue
+            if wanted_category != ALL_CATEGORIES and expense.category != wanted_category:
+                continue
+            if wanted_cadence != ALL_CADENCES:
+                label = self.CADENCE_LABELS.get(expense.cadence, expense.cadence.title())
+                if label != wanted_cadence:
+                    continue
+            if search and search not in expense.description.lower() and search not in expense.category.lower():
                 continue
             following = next_occurrence(expense, today)
             rows.append((following, expense))
@@ -2502,6 +2735,15 @@ class ExpenseTrackerApp:
                 iid=expense.id,
                 values=(expense.description, amount, cadence, due, expense.account, expense.category),
             )
+
+        total = len([e for e in self.expenses if e.amount is not None])
+        shown = len(rows)
+        if hasattr(self, "result_label"):
+            word = "subscription" if shown == 1 else "subscriptions"
+            if shown == len(self.expenses):
+                self.result_label.config(text=f"{shown} {word}")
+            else:
+                self.result_label.config(text=f"{shown} of {len(self.expenses)} {word}")
 
     def _selected_from_all_list(self):
         selection = self.all_list.selection()

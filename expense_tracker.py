@@ -619,25 +619,38 @@ def next_occurrence(expense: Expense, start: date, horizon_days: int = 800):
     return None
 
 
-def get_category_totals(
-    expenses: List[Expense], year: int, month: int, account: Optional[str] = None
+GROUP_FIELDS = ("category", "account")
+
+
+def get_totals_by(
+    expenses: List[Expense], year: int, month: int, field: str = "category",
+    account: Optional[str] = None,
 ) -> List[tuple]:
-    """Spend per category for one month, largest first.
+    """Spend for one month grouped by `field`, largest first.
 
     Uses the same occurrence counting as get_total_for_month, so a weekly
     subscription contributes every time it falls due rather than once.
     """
+    if field not in GROUP_FIELDS:
+        raise ValueError(f"cannot group by {field!r}; expected one of {GROUP_FIELDS}")
+
     totals: dict = {}
     for expense in get_expenses_for_month(expenses, year, month, account):
         if expense.amount is None:
             continue
         occurrences = len(occurrences_in_month(expense, year, month))
-        name = expense.category or "Uncategorised"
+        name = getattr(expense, field) or "Uncategorised"
         totals[name] = totals.get(name, 0.0) + expense.amount * occurrences
 
     ranked = [(name, round(value, 2)) for name, value in totals.items()]
     ranked.sort(key=lambda item: (-item[1], item[0].lower()))
     return ranked
+
+
+def get_category_totals(
+    expenses: List[Expense], year: int, month: int, account: Optional[str] = None
+) -> List[tuple]:
+    return get_totals_by(expenses, year, month, "category", account)
 
 
 def get_monthly_totals(expenses: List[Expense], year: int, account: Optional[str] = None) -> List[float]:

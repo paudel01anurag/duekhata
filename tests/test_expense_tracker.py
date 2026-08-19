@@ -18,6 +18,7 @@ from expense_tracker import (
     get_expenses_for_day,
     get_expenses_for_month,
     get_monthly_totals,
+    get_totals_by,
     next_occurrence,
     get_paid_expense_ids,
     get_paid_total_for_month,
@@ -354,6 +355,33 @@ class NextOccurrenceTests(unittest.TestCase):
         expense = create_expense("Domain", 18.0, "2026-01-14", "Main", "Software",
                                  cadence=CADENCE_YEARLY, due_day=14)
         self.assertEqual(next_occurrence(expense, date(2026, 8, 1)), date(2027, 1, 14))
+
+
+class GroupedTotalsTests(unittest.TestCase):
+    def _sample(self):
+        return [
+            create_expense("Netflix", 10.0, "2026-01-05", "Main", "Streaming",
+                           cadence=CADENCE_MONTHLY, due_day=5),
+            create_expense("Adobe", 60.0, "2026-01-12", "Business", "Software",
+                           cadence=CADENCE_MONTHLY, due_day=12),
+            create_expense("Notion", 12.0, "2026-01-18", "Business", "Software",
+                           cadence=CADENCE_MONTHLY, due_day=18),
+        ]
+
+    def test_grouping_by_account(self):
+        totals = dict(get_totals_by(self._sample(), 2026, 8, "account"))
+        self.assertEqual(totals, {"Business": 72.0, "Main": 10.0})
+
+    def test_grouping_by_category_matches_the_named_helper(self):
+        sample = self._sample()
+        self.assertEqual(
+            get_totals_by(sample, 2026, 8, "category"),
+            get_category_totals(sample, 2026, 8),
+        )
+
+    def test_an_unknown_field_is_rejected(self):
+        with self.assertRaises(ValueError):
+            get_totals_by(self._sample(), 2026, 8, "colour")
 
 
 if __name__ == "__main__":
