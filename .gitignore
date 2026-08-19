@@ -24,3 +24,6 @@ tkinter_test.py
 
 # Manual source snapshots, superseded by git tags
 versions/
+
+# Assistant working notes. Kept locally; not useful to anyone reading the repo.
+aristotle/
