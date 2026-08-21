@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import calendar
 import json
+import secrets
 import sqlite3
 import textwrap
 from contextlib import contextmanager
@@ -127,6 +128,22 @@ def _migrate_expense_columns(connection: sqlite3.Connection) -> None:
         """,
         (CADENCE_MONTHLY, CADENCE_ONCE),
     )
+
+
+def _new_id() -> str:
+    """A unique identifier for a new record.
+
+    The timestamp alone was not enough. Windows' clock granularity can be
+    coarse enough that two records created in quick succession get the same
+    stamp, and a duplicate id here is not cosmetic: payments are matched to
+    subscriptions by id, so marking one paid marked its twin, and deleting one
+    deleted both. Continuous integration caught this where a faster local clock
+    hid it.
+
+    The timestamp is kept as a prefix because it makes ids readable and roughly
+    ordered by creation; the random suffix is what makes them unique.
+    """
+    return datetime.now().strftime("%Y%m%d%H%M%S%f") + "-" + secrets.token_hex(4)
 
 
 def create_schema(data_file: Path) -> None:
@@ -528,7 +545,7 @@ def create_card(
         raise ValueError("a card needs a name")
 
     return Card(
-        id=card_id or datetime.now().strftime("%Y%m%d%H%M%S%f"),
+        id=card_id or _new_id(),
         name=cleaned,
         due_day=day,
         color=color or "#5b8ac7",
@@ -761,7 +778,7 @@ def create_expense(
             due_day = None
 
     return Expense(
-        id=expense_id or datetime.now().strftime("%Y%m%d%H%M%S%f"),
+        id=expense_id or _new_id(),
         description=description.strip(),
         amount=normalized_amount,
         date=normalized_date,

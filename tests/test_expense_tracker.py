@@ -1,5 +1,6 @@
 import sqlite3
 import tempfile
+from unittest import mock
 import unittest
 from datetime import date
 from pathlib import Path
@@ -372,6 +373,48 @@ class GroupedTotalsTests(unittest.TestCase):
     def test_an_unknown_field_is_rejected(self):
         with self.assertRaises(ValueError):
             get_totals_by(self._sample(), 2026, 8, "colour")
+
+
+class IdentifierTests(unittest.TestCase):
+    """Ids must be unique even when the clock does not move.
+
+    A duplicate id is not cosmetic. Payments are matched to subscriptions by
+    id, so two records sharing one meant marking one paid marked both, and
+    deleting one deleted both.
+    """
+
+    def _stalled_clock(self):
+        from datetime import datetime as real_datetime
+
+        class Stalled(real_datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return real_datetime(2026, 8, 21, 10, 0, 0, 0)
+
+        return Stalled
+
+    def test_expense_ids_are_unique_with_a_clock_that_does_not_move(self) -> None:
+        import expense_tracker
+
+        with mock.patch.object(expense_tracker, "datetime", self._stalled_clock()):
+            ids = [
+                create_expense("Netflix", 1.0, "2026-01-01", "Main", "Streaming").id
+                for _ in range(200)
+            ]
+        self.assertEqual(len(set(ids)), 200)
+
+    def test_card_ids_are_unique_with_a_clock_that_does_not_move(self) -> None:
+        import expense_tracker
+        from expense_tracker import create_card
+
+        with mock.patch.object(expense_tracker, "datetime", self._stalled_clock()):
+            ids = [create_card("Chase", 15).id for _ in range(200)]
+        self.assertEqual(len(set(ids)), 200)
+
+    def test_an_explicit_id_is_still_respected(self) -> None:
+        kept = create_expense("Netflix", 1.0, "2026-01-01", "Main", "Streaming",
+                              expense_id="chosen-id")
+        self.assertEqual(kept.id, "chosen-id")
 
 
 class RunRateTests(unittest.TestCase):
