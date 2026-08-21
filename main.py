@@ -2783,7 +2783,14 @@ class ExpenseTrackerApp:
         if expense is None:
             messagebox.showinfo("Nothing selected", "Select a subscription in the list first.")
             return
+        self._open_edit_dialog(expense)
 
+    def _open_edit_dialog(self, expense) -> None:
+        """Open the entry form on an existing subscription.
+
+        Both the calendar's day list and the Subscriptions view edit through here,
+        so the two cannot drift apart.
+        """
         dialog = AddExpenseDialog(
             self.root,
             self.data_file,
