@@ -3,29 +3,37 @@
 A Windows desktop application for keeping track of recurring subscriptions and monthly bills. It
 shows what is due, what has been paid, and what is still to leave your account this month.
 
+## ⬇ Download the application
+
+### **[Get DueKhata for Windows](https://github.com/paudel01anurag/duekhata/releases/latest)**
+
+> **Do not use the green `Code` button at the top of this page.** That gives you the source code,
+> which needs Python installed to do anything. The link above gives you the application itself.
+
+**Nothing to install.** Take the ZIP under *Assets*, extract it, and double-click `DueKhata.exe`.
+Everything the application needs is already inside that file — Python included — so it runs on a
+computer that has never had Python on it. Deleting the file removes it completely.
+
+Windows shows a blue **"Windows protected your PC"** box the first time. Click **More info**, then
+**Run anyway**. That happens because the file is not signed with a paid certificate, not because
+anything is wrong with it. Fuller notes are in [TESTERS.txt](TESTERS.txt).
+
 Everything is stored locally. There is no account, no server, and no network access of any kind.
 
 ![The dashboard, showing monthly totals, spending by category, and upcoming payments](docs/dashboard.png)
 
-## Download
-
-**[Download the latest release](https://github.com/paudel01anurag/duekhata/releases/latest)**
-— take the ZIP under *Assets*, not the green `Code` button, which gives you the source rather than
-the application.
-
-There is no installer. Extract the ZIP and run the executable; deleting it removes the application
-completely. Installation notes, including the SmartScreen warning that appears on first run, are in
-[TESTERS.txt](TESTERS.txt).
-
 ## Features
 
-- Four views: a dashboard, a full subscription list, a month calendar, and spending statistics
+- Five views: a dashboard, a full subscription list, credit cards, a month calendar, and statistics
 - Five billing rhythms: one-off, weekly, monthly, quarterly and yearly
 - A start date and an optional end date, so cancelled subscriptions leave your forecast
-- Running totals for the month: projected, remaining, and paid
+- Both figures that matter: what bills this month, and what your subscriptions cost per month on
+  average, so a yearly renewal does not look like a mistake
+- Credit cards tracked for their due date and what was paid each month — never counted as
+  spending, because paying a card settles purchases that are already recorded
 - Payments marked as paid per month, so last month's record survives into the next
 - Editing that preserves payment history
-- Grouping by account and category, with the calendar filterable by account
+- Search and filter the subscription list by name, category or billing rhythm
 - Warm light and dark themes
 - A local username and password gate
 
@@ -68,8 +76,8 @@ untouched. There is **no backup or export yet** — treat that database as the o
 python -m unittest discover -s tests
 ```
 
-Thirty tests covering the recurrence rules, month and category totals, paid tracking, editing, and
-the schema migration from older databases.
+Fifty-seven tests covering the recurrence rules, month and category totals, the monthly run rate,
+paid tracking, editing, credit cards, and the schema migration from older databases.
 
 ## Building
 
@@ -96,7 +104,7 @@ A personal project shared openly, rather than a finished product.
 
 | Path | Contents |
 |---|---|
-| `main.py` | User interface: design tokens, custom widgets, the four views and three windows |
+| `main.py` | User interface: design tokens, custom widgets, the five views and their dialogs |
 | `expense_tracker.py` | Data model, recurrence engine, and SQLite access. No interface code |
 | `tests/` | Unit tests for `expense_tracker.py` |
 | `build_windows.ps1` | Builds the executable and the distributable ZIP |
