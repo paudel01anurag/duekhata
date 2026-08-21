@@ -40,6 +40,17 @@ Everything is stored locally. There is no account, no server, and no network acc
 - Warm light and dark themes
 - A local username and password gate
 
+### Cards
+
+Credit cards are tracked for **when they fall due**, not for what they cost, and their payments are
+never counted as spending — paying a card settles purchases that are already recorded as
+subscriptions, so counting the payment would count the same money twice.
+
+Each card shows what you paid this month against last month, so you can see whether the balance is
+going up or coming down, alongside the total paid on cards this year.
+
+![The Cards view, listing each card with its due date, what was paid this month and last, and the total paid this year](docs/cards.png)
+
 ## How repeat dates are worked out
 
 The stored date is the first billing date and the end date, if set, is the last. A subscription
