@@ -38,6 +38,23 @@ LABELS_TO_CADENCE = {label: cadence for cadence, label in CADENCE_LABELS.items()
 
 
 @dataclass
+class Card:
+    """A credit card, tracked for its due date rather than its cost.
+
+    A card payment is a settlement, not a purchase: the spending happened when
+    the card was used, and those items are recorded separately. So a card
+    carries no amount of its own — only what was actually paid each month,
+    which is a different number every time.
+    """
+
+    id: str
+    name: str
+    due_day: int
+    color: str = "#5b8ac7"
+    notes: str = ""
+
+
+@dataclass
 class Expense:
     id: str
     description: str
@@ -143,6 +160,34 @@ def create_schema(data_file: Path) -> None:
                 paid_on TEXT NOT NULL DEFAULT (DATE('now')),
                 PRIMARY KEY (expense_id, paid_year, paid_month),
                 FOREIGN KEY (expense_id) REFERENCES expenses (id) ON DELETE CASCADE
+            )
+            """
+        )
+        # Cards are deliberately not expenses. Paying a card settles purchases
+        # that were already recorded, so counting the payment as spending would
+        # count the same money twice. They live in their own tables and never
+        # reach any spending total.
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cards (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                due_day INTEGER NOT NULL,
+                color TEXT NOT NULL DEFAULT '#5b8ac7',
+                notes TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS card_payments (
+                card_id TEXT NOT NULL,
+                paid_year INTEGER NOT NULL,
+                paid_month INTEGER NOT NULL,
+                amount REAL NOT NULL,
+                paid_on TEXT NOT NULL DEFAULT (DATE('now')),
+                PRIMARY KEY (card_id, paid_year, paid_month),
+                FOREIGN KEY (card_id) REFERENCES cards (id) ON DELETE CASCADE
             )
             """
         )
@@ -456,6 +501,180 @@ def delete_expense(data_file: Path, expense_id: str) -> None:
         return
     with _connect(data_file) as connection:
         connection.execute("DELETE FROM expenses WHERE id = ?", (expense_id,))
+
+
+# --- cards ---------------------------------------------------------------
+#
+# Everything below is kept apart from expenses on purpose. No function here
+# feeds a spending total, and nothing in the expense side reads these tables.
+
+
+def create_card(
+    name: str,
+    due_day: int,
+    color: str = "#5b8ac7",
+    notes: str = "",
+    card_id: Optional[str] = None,
+) -> Card:
+    try:
+        day = int(due_day)
+    except (TypeError, ValueError):
+        raise ValueError("a card needs a due day between 1 and 31")
+    if not 1 <= day <= 31:
+        raise ValueError("a card needs a due day between 1 and 31")
+
+    cleaned = name.strip()
+    if not cleaned:
+        raise ValueError("a card needs a name")
+
+    return Card(
+        id=card_id or datetime.now().strftime("%Y%m%d%H%M%S%f"),
+        name=cleaned,
+        due_day=day,
+        color=color or "#5b8ac7",
+        notes=notes.strip(),
+    )
+
+
+def load_cards(data_file: Path) -> List[Card]:
+    if data_file.suffix.lower() == ".json" or not data_file.exists():
+        return []
+    try:
+        with _connect(data_file) as connection:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(
+                "SELECT id, name, due_day, color, notes FROM cards ORDER BY due_day, name"
+            ).fetchall()
+    except sqlite3.OperationalError:
+        # A database written before cards existed.
+        return []
+    return [
+        Card(
+            id=row["id"],
+            name=row["name"],
+            due_day=row["due_day"],
+            color=row["color"] or "#5b8ac7",
+            notes=row["notes"] or "",
+        )
+        for row in rows
+    ]
+
+
+def save_card(data_file: Path, card: Card) -> None:
+    """Insert or update, without disturbing the payments already recorded.
+
+    Uses ON CONFLICT rather than INSERT OR REPLACE: REPLACE deletes the row
+    first, which would cascade and wipe every payment against the card.
+    """
+    if data_file.suffix.lower() == ".json":
+        return
+    create_schema(data_file)
+    with _connect(data_file) as connection:
+        connection.execute(
+            """
+            INSERT INTO cards (id, name, due_day, color, notes)
+            VALUES (:id, :name, :due_day, :color, :notes)
+            ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                due_day = excluded.due_day,
+                color = excluded.color,
+                notes = excluded.notes
+            """,
+            asdict(card),
+        )
+
+
+def delete_card(data_file: Path, card_id: str) -> None:
+    if data_file.suffix.lower() == ".json" or not data_file.exists():
+        return
+    with _connect(data_file) as connection:
+        connection.execute("DELETE FROM cards WHERE id = ?", (card_id,))
+
+
+def card_due_date(card: Card, year: int, month: int) -> date:
+    """The card's due date in a given month, clamped to months that are short."""
+    last_day = calendar.monthrange(year, month)[1]
+    return date(year, month, min(card.due_day, last_day))
+
+
+def set_card_payment(
+    data_file: Path, card_id: str, year: int, month: int, amount: Optional[float]
+) -> None:
+    """Record what was actually paid. `None` clears the month."""
+    if data_file.suffix.lower() == ".json" or not data_file.exists():
+        return
+    with _connect(data_file) as connection:
+        if amount is None:
+            connection.execute(
+                "DELETE FROM card_payments WHERE card_id = ? AND paid_year = ? AND paid_month = ?",
+                (card_id, year, month),
+            )
+            return
+        connection.execute(
+            """
+            INSERT INTO card_payments (card_id, paid_year, paid_month, amount, paid_on)
+            VALUES (?, ?, ?, ?, DATE('now'))
+            ON CONFLICT(card_id, paid_year, paid_month) DO UPDATE SET
+                amount = excluded.amount,
+                paid_on = DATE('now')
+            """,
+            (card_id, year, month, round(float(amount), 2)),
+        )
+
+
+def get_card_payments(data_file: Path, year: int, month: int) -> dict:
+    """What was paid against each card in one month, keyed by card id."""
+    if data_file.suffix.lower() == ".json" or not data_file.exists():
+        return {}
+    try:
+        with _connect(data_file) as connection:
+            rows = connection.execute(
+                "SELECT card_id, amount FROM card_payments WHERE paid_year = ? AND paid_month = ?",
+                (year, month),
+            ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    return {row[0]: row[1] for row in rows}
+
+
+def get_card_payment_history(data_file: Path, card_id: str, limit: int = 12) -> List[tuple]:
+    """Recent payments as (year, month, amount), newest first."""
+    if data_file.suffix.lower() == ".json" or not data_file.exists():
+        return []
+    try:
+        with _connect(data_file) as connection:
+            rows = connection.execute(
+                """
+                SELECT paid_year, paid_month, amount FROM card_payments
+                WHERE card_id = ?
+                ORDER BY paid_year DESC, paid_month DESC
+                LIMIT ?
+                """,
+                (card_id, limit),
+            ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    return [(row[0], row[1], row[2]) for row in rows]
+
+
+def get_cards_due_in_month(cards: List[Card], year: int, month: int) -> dict:
+    """Cards falling due in a month, keyed by ISO date, for the calendar."""
+    by_day: dict = {}
+    for card in cards:
+        key = card_due_date(card, year, month).isoformat()
+        by_day.setdefault(key, []).append(card)
+    return by_day
+
+
+def get_cards_due_between(cards: List[Card], start: date, days: int = 14) -> List[tuple]:
+    """Card due dates in the next `days` days, as (date, card) pairs."""
+    upcoming: List[tuple] = []
+    for offset in range(days + 1):
+        day = start + timedelta(days=offset)
+        for card in cards:
+            if card_due_date(card, day.year, day.month) == day:
+                upcoming.append((day, card))
+    return sorted(upcoming, key=lambda pair: (pair[0], pair[1].name.lower()))
 
 
 def wrap_text(text: str, width: int = 18) -> str:

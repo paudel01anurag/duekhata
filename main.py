@@ -10,7 +10,7 @@ import sys
 import tkinter as tk
 from datetime import date
 from pathlib import Path
-from tkinter import colorchooser, messagebox, ttk
+from tkinter import colorchooser, messagebox, simpledialog, ttk
 from tkinter import font as tkfont
 
 from tkcalendar import DateEntry
@@ -48,6 +48,15 @@ from expense_tracker import (
     get_stored_credentials,
     save_credentials,
     set_expense_paid,
+    card_due_date,
+    create_card,
+    delete_card,
+    get_card_payments,
+    get_cards_due_between,
+    get_cards_due_in_month,
+    load_cards,
+    save_card,
+    set_card_payment,
 )
 
 
@@ -201,6 +210,7 @@ ICON_LIST = chr(0xE8FD)
 ICON_CALENDAR = chr(0xE787)
 ICON_STATS = chr(0xE9D9)
 ICON_EDIT = chr(0xE70F)
+ICON_CARD = chr(0xE8C7)
 
 # Fallback glyphs for machines without the icon font.
 ICON_FALLBACK = {
@@ -216,6 +226,7 @@ ICON_FALLBACK = {
     ICON_CALENDAR: "▤",
     ICON_STATS: "▓",
     ICON_EDIT: "✎",
+    ICON_CARD: "▭",
 }
 
 # 4px base grid.
@@ -226,6 +237,9 @@ DETAILS_WIDTH = 372
 
 ALL_CATEGORIES = "All categories"
 ALL_CADENCES = "Any"
+# Day-list rows for cards carry this prefix so their ids can never collide with
+# an expense id, which is what the edit and delete actions look up.
+CARD_ROW_PREFIX = "card:"
 
 # Chart colours, warm-leaning so they sit with the palette rather than fight it.
 CATEGORY_COLOURS = (
@@ -1183,6 +1197,7 @@ class ExpenseTrackerApp:
         self.data_file = data_file
         self.authenticated_username = username or ""
         self.expenses = load_expenses(self.data_file)
+        self.cards = load_cards(self.data_file)
         self.current_date = date.today().replace(day=1)
         self.selected_date = date.today()
         self.theme_mode = tk.StringVar(value="light")
@@ -1465,7 +1480,7 @@ class ExpenseTrackerApp:
     # ------------------------------------------------------------------
     # Layout
     #
-    # A sidebar selects one of four views, which are stacked in the same grid
+    # A sidebar selects one of five views, which are stacked in the same grid
     # cell and raised as needed. The month totals are
     # shared chrome, so they live outside the views and stay put while switching.
     # ------------------------------------------------------------------
@@ -1473,6 +1488,7 @@ class ExpenseTrackerApp:
     VIEWS = (
         ("dashboard", ICON_DASHBOARD, "Dashboard"),
         ("subscriptions", ICON_LIST, "Subscriptions"),
+        ("cards", ICON_CARD, "Cards"),
         ("calendar", ICON_CALENDAR, "Calendar"),
         ("statistics", ICON_STATS, "Statistics"),
     )
@@ -1484,6 +1500,10 @@ class ExpenseTrackerApp:
         self.root.rowconfigure(0, weight=1)
 
         self.themed_buttons = []
+        # Plain tk.Labels placed in a view are built once and never rebuilt, so
+        # the theme sweep below has no way to find them. Registering them with
+        # the palette key their text uses keeps them in step.
+        self.themed_labels = []
         self._build_sidebar(theme)
 
         content = tk.Frame(self.root, bg=theme["background"])
@@ -1502,6 +1522,7 @@ class ExpenseTrackerApp:
         self.views = {}
         self._build_dashboard_view(theme)
         self._build_subscriptions_view(theme)
+        self._build_cards_view(theme)
         self._build_calendar_view(theme)
         self._build_statistics_view(theme)
         self.show_view("dashboard")
@@ -1574,6 +1595,13 @@ class ExpenseTrackerApp:
             item.set_selected(key == name)
         titles = {key: label for key, _glyph, label in self.VIEWS}
         self.view_title.config(text=titles.get(name, name.title()))
+        # The Cards view has its own Add card button. Leaving "Add payment" in
+        # the header there would put two different "add" buttons on one screen,
+        # one of which quietly creates a subscription.
+        if name == "cards":
+            self.add_button.grid_remove()
+        else:
+            self.add_button.grid()
         self.refresh_view()
 
     # --- dashboard ----------------------------------------------------
@@ -1678,6 +1706,211 @@ class ExpenseTrackerApp:
         )
         self.all_delete_button.grid(row=0, column=1)
         self.themed_buttons.extend([self.all_edit_button, self.all_delete_button])
+
+    # --- cards --------------------------------------------------------
+    #
+    # A card payment is a settlement, not a purchase. Everything here is kept
+    # out of the spending totals on purpose; see the note in expense_tracker.
+
+    def _build_cards_view(self, theme: dict) -> None:
+        view = self._new_view("cards", theme)
+        view.columnconfigure(0, weight=1)
+        view.rowconfigure(2, weight=1)
+
+        intro = tk.Label(
+            view,
+            text=(
+                "Cards are tracked for their due date, not their cost. What you pay here settles "
+                "purchases already listed under Subscriptions, so it is never added to your spending."
+            ),
+            bg=theme["background"],
+            fg=theme["text_muted"],
+            font=text_font(10),
+            justify="left",
+            anchor="w",
+            wraplength=760,
+        )
+        intro.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, SPACE_3))
+        self.themed_labels.append((intro, "text_muted"))
+
+        self.cards_summary = ttk.Label(view, text="", style="Muted.TLabel")
+        self.cards_summary.grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, SPACE_2))
+
+        self.cards_list = ttk.Treeview(
+            view,
+            columns=("name", "due", "this_month", "last_month", "change"),
+            show="headings",
+        )
+        headings = (
+            ("name", "CARD", 300, "w", True),
+            ("due", "DUE", 130, "w", False),
+            ("this_month", "THIS MONTH", 130, "e", False),
+            ("last_month", "LAST MONTH", 130, "e", False),
+            ("change", "CHANGE", 120, "e", False),
+        )
+        for key, title, width, anchor, stretch in headings:
+            self.cards_list.heading(key, text=title, anchor=anchor)
+            self.cards_list.column(key, width=width, minwidth=80, anchor=anchor, stretch=stretch)
+        self.cards_list.grid(row=2, column=0, sticky="nsew")
+
+        scrollbar = ttk.Scrollbar(view, orient="vertical", command=self.cards_list.yview)
+        scrollbar.grid(row=2, column=1, sticky="ns")
+        self.cards_list.configure(yscrollcommand=scrollbar.set)
+        self.cards_list.bind("<Double-1>", self.record_card_payment)
+
+        actions = tk.Frame(view, bg=theme["background"])
+        actions.grid(row=3, column=0, columnspan=2, sticky="e", pady=(SPACE_3, 0))
+        self.card_add_button = PillButton(
+            actions, "Add card", self.open_add_card_dialog, theme, glyph=ICON_ADD
+        )
+        self.card_add_button.grid(row=0, column=0, padx=(0, SPACE_2))
+        self.card_record_button = PillButton(
+            actions, "Record payment", self.record_card_payment, theme,
+            variant="tonal", glyph=ICON_PAID,
+        )
+        self.card_record_button.grid(row=0, column=1, padx=(0, SPACE_2))
+        self.card_edit_button = PillButton(
+            actions, "Edit", self.edit_selected_card, theme, variant="tonal", glyph=ICON_EDIT
+        )
+        self.card_edit_button.grid(row=0, column=2, padx=(0, SPACE_2))
+        self.card_delete_button = PillButton(
+            actions, "Delete", self.delete_selected_card, theme, variant="outlined", glyph=ICON_DELETE
+        )
+        self.card_delete_button.grid(row=0, column=3)
+        self.themed_buttons.extend([
+            self.card_add_button, self.card_record_button,
+            self.card_edit_button, self.card_delete_button,
+        ])
+
+    def populate_cards_list(self) -> None:
+        if not hasattr(self, "cards_list"):
+            return
+        for row_id in self.cards_list.get_children():
+            self.cards_list.delete(row_id)
+
+        year, month = self.current_date.year, self.current_date.month
+        previous_year, previous_month = (year, month - 1) if month > 1 else (year - 1, 12)
+        this_month = get_card_payments(self.data_file, year, month)
+        last_month = get_card_payments(self.data_file, previous_year, previous_month)
+
+        for card in self.cards:
+            due = card_due_date(card, year, month)
+            paid = this_month.get(card.id)
+            previous = last_month.get(card.id)
+
+            # The comparison is the reason this view exists: is what I am
+            # paying down going up or coming down?
+            if paid is None:
+                change = "—"
+            elif previous is None:
+                change = "first"
+            else:
+                difference = round(paid - previous, 2)
+                if abs(difference) < 0.005:
+                    change = "same"
+                else:
+                    sign = "+" if difference > 0 else "−"
+                    change = sign + "$" + format(abs(difference), ",.2f")
+
+            self.cards_list.insert(
+                "", "end",
+                values=(
+                    card.name,
+                    due.strftime("%d %b"),
+                    "not yet" if paid is None else "$" + format(paid, ",.2f"),
+                    "—" if previous is None else "$" + format(previous, ",.2f"),
+                    change,
+                ),
+                iid=card.id,
+            )
+
+        if not self.cards:
+            self.cards_summary.config(text="No cards yet. Add one to keep an eye on its due date.")
+            return
+
+        paid_total = sum(this_month.values())
+        outstanding = [card for card in self.cards if card.id not in this_month]
+        word = "card" if len(self.cards) == 1 else "cards"
+        summary = str(len(self.cards)) + " " + word + "  ·  $" + format(paid_total, ",.2f") + " paid this month"
+        if outstanding:
+            summary += "  ·  still to pay: " + ", ".join(card.name for card in outstanding)
+        else:
+            summary += "  ·  all settled"
+        self.cards_summary.config(text=summary)
+
+    def _selected_card(self):
+        selection = self.cards_list.selection()
+        if not selection:
+            return None
+        return next((card for card in self.cards if card.id == selection[0]), None)
+
+    def open_add_card_dialog(self) -> None:
+        self._open_card_dialog(None)
+
+    def edit_selected_card(self, _event=None) -> None:
+        card = self._selected_card()
+        if card is None:
+            messagebox.showinfo("Nothing selected", "Select a card in the list first.")
+            return
+        self._open_card_dialog(card)
+
+    def _open_card_dialog(self, card) -> None:
+        dialog = CardDialog(
+            self.root, self.data_file, self.refresh_view,
+            theme_mode=self.theme_mode.get(), card=card,
+        )
+        dialog.grab_set()
+        self.root.wait_window(dialog)
+
+    def delete_selected_card(self, _event=None) -> None:
+        card = self._selected_card()
+        if card is None:
+            messagebox.showinfo("Nothing selected", "Select a card in the list first.")
+            return
+        confirmed = messagebox.askyesno(
+            "Delete card",
+            "Delete '" + card.name + "'?\n\nThis also removes every payment you recorded against it.",
+        )
+        if not confirmed:
+            return
+        delete_card(self.data_file, card.id)
+        self.refresh_view()
+
+    def record_card_payment(self, _event=None) -> None:
+        """Capture what was actually paid, which is a new number every month."""
+        card = self._selected_card()
+        if card is None:
+            messagebox.showinfo("Nothing selected", "Select a card in the list first.")
+            return
+
+        year, month = self.current_date.year, self.current_date.month
+        existing = get_card_payments(self.data_file, year, month).get(card.id)
+        month_name = self.current_date.strftime("%B %Y")
+        answer = simpledialog.askstring(
+            "Record payment",
+            "What did you pay on " + card.name + " in " + month_name + "?"
+            "\n\nLeave it empty to clear the month.",
+            initialvalue="" if existing is None else format(existing, ".2f"),
+            parent=self.root,
+        )
+        if answer is None:
+            return
+
+        answer = answer.strip().lstrip("$").replace(",", "")
+        if not answer:
+            set_card_payment(self.data_file, card.id, year, month, None)
+            self.refresh_view()
+            return
+        try:
+            amount = float(answer)
+        except ValueError:
+            messagebox.showerror("Not a number", "'" + answer + "' is not an amount I can record.")
+            return
+        if amount < 0:
+            messagebox.showerror("Not an amount", "A payment cannot be negative.")
+            return
+        set_card_payment(self.data_file, card.id, year, month, amount)
+        self.refresh_view()
 
     # --- calendar -----------------------------------------------------
     def _build_calendar_view(self, theme: dict) -> None:
@@ -1956,7 +2189,11 @@ class ExpenseTrackerApp:
         canvas = self.upcoming_canvas
 
         today = date.today()
-        entries = get_upcoming(self.expenses, today, days=14)
+        # Card due dates belong here: this panel answers "what is coming?", which
+        # is a question about dates. It is not a total, so nothing is miscounted.
+        entries = [(day, expense, False) for day, expense in get_upcoming(self.expenses, today, days=14)]
+        entries += [(day, card, True) for day, card in get_cards_due_between(self.cards, today, days=14)]
+        entries.sort(key=lambda row: (row[0], row[1].name.lower() if row[2] else row[1].description.lower()))
         if not entries:
             canvas.create_text(
                 left, top + 8, text="Nothing due in the next two weeks.", anchor="nw",
@@ -1966,7 +2203,7 @@ class ExpenseTrackerApp:
 
         row_height = 30
         visible = max(1, min(len(entries), int((bottom - top) // row_height)))
-        for index, (day, expense) in enumerate(entries[:visible]):
+        for index, (day, entry, is_card) in enumerate(entries[:visible]):
             y = top + 6 + index * row_height
             delta = (day - today).days
             if delta == 0:
@@ -1976,18 +2213,24 @@ class ExpenseTrackerApp:
             else:
                 when, when_colour = day.strftime("%a %d %b"), theme["text_secondary"]
 
-            colour = expense.color or theme["accent"]
+            colour = entry.color or theme["accent"]
             canvas.create_rectangle(left, y + 2, left + 3, y + 17, fill=colour, outline="")
             canvas.create_text(
-                left + 10, y, text=expense.description, anchor="nw",
+                left + 10, y, text=entry.name if is_card else entry.description, anchor="nw",
                 fill=theme["text"], font=text_font(9, bold=True),
             )
             canvas.create_text(
                 left + 10, y + 14, text=when, anchor="nw", fill=when_colour, font=text_font(8)
             )
-            if expense.amount is not None:
+            if is_card:
+                # No amount: what a card costs is not known until it is paid.
                 canvas.create_text(
-                    right, y + 5, text=f"${expense.amount:,.2f}", anchor="ne",
+                    right, y + 5, text="card", anchor="ne",
+                    fill=theme["text_muted"], font=text_font(8),
+                )
+            elif entry.amount is not None:
+                canvas.create_text(
+                    right, y + 5, text=f"${entry.amount:,.2f}", anchor="ne",
                     fill=theme["text"], font=text_font(9),
                 )
 
@@ -2200,6 +2443,7 @@ class ExpenseTrackerApp:
 
     def refresh_view(self) -> None:
         self.expenses = load_expenses(self.data_file)
+        self.cards = load_cards(self.data_file)
         self.paid_expense_ids = get_paid_expense_ids(self.data_file, self.current_date.year, self.current_date.month)
         self._refresh_theme_button()
 
@@ -2243,6 +2487,7 @@ class ExpenseTrackerApp:
         self._draw_day_summary_card()
 
         self.populate_all_list()
+        self.populate_cards_list()
         self.populate_calendar()
         self.populate_details()
 
@@ -2278,6 +2523,9 @@ class ExpenseTrackerApp:
                 child.configure(bg=theme["background"])
             recolor_containers(child, theme["background"])
 
+        for label, foreground_key in getattr(self, "themed_labels", []):
+            label.configure(bg=theme["background"], fg=theme[foreground_key])
+
     def _render_calendar_cell(
         self,
         cell: tk.Canvas,
@@ -2285,6 +2533,7 @@ class ExpenseTrackerApp:
         items: list,
         is_selected: bool = False,
         is_today: bool = False,
+        cards: list | None = None,
     ) -> None:
         theme = self._theme()
         cell.delete("all")
@@ -2330,11 +2579,13 @@ class ExpenseTrackerApp:
         else:
             cell.create_text(SPACE_3, SPACE_2 + 1, text=day_text, anchor="nw", fill=theme["text"], font=text_font(10, bold=True))
 
-        if not items:
+        cards = cards or []
+        if not items and not cards:
             return
 
         # A day cell is barely 100px wide, so the chips carry the names and the
         # day's total is summarised once in the header instead of per chip.
+        # Cards are excluded: what they settle is already counted below.
         day_total = sum(expense.amount or 0 for expense in items)
         if day_total:
             cell.create_text(
@@ -2351,16 +2602,42 @@ class ExpenseTrackerApp:
         top = SPACE_2 + 22
         available = height - top - SPACE_2 - 6
         capacity = max(1, available // (chip_height + chip_gap))
-        max_visible = capacity
-        if len(items) > capacity:
-            max_visible = max(1, capacity - 1)
+        total_entries = len(items) + len(cards)
+        # One slot is surrendered to the "+N more" line when not everything fits.
+        slots = capacity if total_entries <= capacity else max(1, capacity - 1)
 
         chip_font = text_font(8)
         left = SPACE_2
         right = width - SPACE_2 - 4
         y = top
 
-        for expense in items[:max_visible]:
+        # Cards are drawn first so a due date is never the thing hidden behind
+        # "+2 more", and hollow so they read as an obligation rather than a
+        # purchase.
+        visible_cards = cards[:slots]
+        visible_items = items[:slots - len(visible_cards)]
+
+        for card in visible_cards:
+            accent_color = card.color or theme["accent"]
+            draw_chip(
+                cell,
+                left,
+                y,
+                right,
+                y + chip_height,
+                bg_color,
+                accent_color,
+                self._truncate_to_width(card.name, max(18, right - left - 16)),
+                theme["text_secondary"],
+                chip_font,
+            )
+            draw_rounded_rect(
+                cell, left, y, right, y + chip_height, min(RADIUS_CHIP, chip_height // 2),
+                "", mix(accent_color, theme["surface"], 0.25), width=1,
+            )
+            y += chip_height + chip_gap
+
+        for expense in visible_items:
             accent_color = expense.color or theme["accent"]
             is_paid = expense.id in self.paid_expense_ids
             tint = 0.30 if is_dark else 0.42
@@ -2387,9 +2664,10 @@ class ExpenseTrackerApp:
             )
             y += chip_height + chip_gap
 
-        if len(items) > max_visible:
+        shown = len(visible_cards) + len(visible_items)
+        if total_entries > shown:
             more_tag = f"calendar_more_{current_day.isoformat()}"
-            remaining = len(items) - max_visible
+            remaining = total_entries - shown
             cell.create_text(
                 left + 4,
                 min(y + chip_height // 2, height - 14),
@@ -2434,6 +2712,7 @@ class ExpenseTrackerApp:
 
         month_calendar = calendar.monthcalendar(self.current_date.year, self.current_date.month)
         day_map = get_expenses_by_day(self.expenses, self.current_date.year, self.current_date.month)
+        card_map = get_cards_due_in_month(self.cards, self.current_date.year, self.current_date.month)
         today = date.today()
         row = 1
         for week in month_calendar:
@@ -2448,16 +2727,18 @@ class ExpenseTrackerApp:
                 is_selected = current_day == self.selected_date
                 is_today = current_day == today
                 items = day_map.get(current_day.strftime("%Y-%m-%d"), [])
+                day_cards = card_map.get(current_day.strftime("%Y-%m-%d"), [])
                 cell = tk.Canvas(self.calendar_frame, width=70, height=86, bg=theme["calendar_bg"], highlightthickness=0)
                 cell.grid(row=row, column=col, sticky="nsew", padx=SPACE_1, pady=SPACE_1)
                 cell.bind(
                     "<Configure>",
-                    lambda _event, target=cell, clicked_day=current_day, clicked_items=tuple(items), selected=is_selected, today_cell=is_today: self._render_calendar_cell(
+                    lambda _event, target=cell, clicked_day=current_day, clicked_items=tuple(items), selected=is_selected, today_cell=is_today, clicked_cards=tuple(day_cards): self._render_calendar_cell(
                         target,
                         clicked_day,
                         list(clicked_items),
                         selected,
                         today_cell,
+                        list(clicked_cards),
                     ),
                 )
 
@@ -2539,6 +2820,16 @@ class ExpenseTrackerApp:
 
         expenses = get_expenses_for_day(self.expenses, self.selected_date)
         theme = self._theme()
+
+        for card in self.cards:
+            if card_due_date(card, self.selected_date.year, self.selected_date.month) != self.selected_date:
+                continue
+            self.details_list.insert(
+                "", "end",
+                values=(card.name, "—", "Card due"),
+                iid=CARD_ROW_PREFIX + card.id,
+            )
+
         for index, expense in enumerate(expenses):
             amount_text = "Planned" if expense.amount is None else f"${expense.amount:.2f}"
             status_text = "Paid" if expense.id in self.paid_expense_ids else "Pending"
@@ -2580,7 +2871,7 @@ class ExpenseTrackerApp:
 
     def toggle_selected_paid(self, _event=None) -> None:
         selected_items = self.details_list.selection()
-        if not selected_items:
+        if not selected_items or self._reject_card_row(selected_items[0]):
             return
         expense_id = selected_items[0]
         is_paid = expense_id in self.paid_expense_ids
@@ -2589,7 +2880,7 @@ class ExpenseTrackerApp:
 
     def delete_selected_entry(self, _event=None) -> None:
         selected_items = self.details_list.selection()
-        if not selected_items:
+        if not selected_items or self._reject_card_row(selected_items[0]):
             return
         expense_id = selected_items[0]
         expense = next((item for item in self.expenses if item.id == expense_id), None)
@@ -2726,6 +3017,16 @@ class ExpenseTrackerApp:
         delete_expense(self.data_file, expense.id)
         self.refresh_view()
 
+    def _reject_card_row(self, row_id: str) -> bool:
+        """Card rows appear in the day list but are not editable from it."""
+        if not row_id.startswith(CARD_ROW_PREFIX):
+            return False
+        messagebox.showinfo(
+            "That is a card",
+            "Card due dates are managed in the Cards view, not here.",
+        )
+        return True
+
     def _selected_expense(self):
         selection = self.details_list.selection()
         if not selection:
@@ -2733,6 +3034,9 @@ class ExpenseTrackerApp:
         return next((item for item in self.expenses if item.id == selection[0]), None)
 
     def edit_selected_entry(self, _event=None) -> None:
+        selection = self.details_list.selection()
+        if selection and self._reject_card_row(selection[0]):
+            return
         expense = self._selected_expense()
         if expense is None:
             messagebox.showinfo("Nothing selected", "Select a subscription in the list first.")
@@ -2756,6 +3060,166 @@ class ExpenseTrackerApp:
         )
         dialog.grab_set()
         self.root.wait_window(dialog)
+
+
+class CardDialog(tk.Toplevel):
+    """Add or edit a credit card.
+
+    Deliberately shorter than the subscription form. A card has no amount and
+    no cadence: it falls due once a month, and what is paid varies, so that is
+    recorded separately when the payment actually happens.
+    """
+
+    def __init__(
+        self,
+        master: tk.Tk,
+        data_file: Path,
+        refresh_callback,
+        theme_mode: str = "light",
+        card=None,
+    ) -> None:
+        super().__init__(master)
+        self.editing = card is not None
+        self.original = card
+        self.data_file = data_file
+        self.refresh_callback = refresh_callback
+        self.theme = WARM_DARK if theme_mode == "dark" else WARM_LIGHT
+        self.title("Edit card" if self.editing else "Add card")
+        self.option_add("*insertBackground", self.theme["input_cursor"])
+
+        self.name_var = tk.StringVar(value=card.name if self.editing else "")
+        self.due_day_var = tk.StringVar(value=str(card.due_day) if self.editing else "1")
+        self.notes_var = tk.StringVar(value=card.notes if self.editing else "")
+        self.color_var = tk.StringVar(value=card.color if self.editing else "#5b8ac7")
+
+        self.configure(bg=self.theme["background"])
+        self.resizable(False, False)
+        self.columnconfigure(0, weight=1)
+
+        header = tk.Frame(self, bg=self.theme["background"])
+        header.grid(row=0, column=0, columnspan=2, sticky="ew", padx=SPACE_5, pady=(SPACE_5, SPACE_4))
+        tk.Label(
+            header,
+            text="Edit card" if self.editing else "Add a card",
+            bg=self.theme["background"],
+            fg=self.theme["text"],
+            font=display_font(16),
+        ).pack(side="left", anchor="w")
+
+        ttk.Label(self, text="Card name").grid(row=1, column=0, columnspan=2, sticky="w", padx=SPACE_5, pady=(0, SPACE_1))
+        tk.Entry(
+            self,
+            textvariable=self.name_var,
+            width=36,
+            bg=self.theme["surface"],
+            fg=self.theme["text"],
+            font=text_font(10),
+            insertbackground=self.theme["input_cursor"],
+            relief="flat",
+            highlightthickness=1,
+            highlightbackground=self.theme["outline"],
+            highlightcolor=self.theme["accent"],
+        ).grid(row=2, column=0, columnspan=2, sticky="ew", padx=SPACE_5, pady=(0, SPACE_3), ipady=7)
+
+        ttk.Label(self, text="Payment due on").grid(row=3, column=0, sticky="w", padx=SPACE_5, pady=(0, SPACE_1))
+        self.due_box = ttk.Combobox(
+            self, textvariable=self.due_day_var, state="readonly", width=8,
+            values=[str(day) for day in range(1, 32)],
+        )
+        self.due_box.grid(row=4, column=0, sticky="w", padx=SPACE_5, pady=(0, SPACE_1))
+
+        tk.Label(
+            self,
+            text="Day of the month. A day past the end of a short month falls on its last day.",
+            bg=self.theme["background"],
+            fg=self.theme["text_muted"],
+            font=text_font(9),
+            justify="left",
+            wraplength=380,
+        ).grid(row=5, column=0, columnspan=2, sticky="w", padx=SPACE_5, pady=(0, SPACE_3))
+
+        ttk.Label(self, text="Note (optional)").grid(row=6, column=0, columnspan=2, sticky="w", padx=SPACE_5, pady=(0, SPACE_1))
+        tk.Entry(
+            self,
+            textvariable=self.notes_var,
+            width=36,
+            bg=self.theme["surface"],
+            fg=self.theme["text"],
+            font=text_font(10),
+            insertbackground=self.theme["input_cursor"],
+            relief="flat",
+            highlightthickness=1,
+            highlightbackground=self.theme["outline"],
+            highlightcolor=self.theme["accent"],
+        ).grid(row=7, column=0, columnspan=2, sticky="ew", padx=SPACE_5, pady=(0, SPACE_3), ipady=7)
+
+        ttk.Label(self, text="Colour").grid(row=8, column=0, columnspan=2, sticky="w", padx=SPACE_5, pady=(0, SPACE_1))
+        swatches = tk.Frame(self, bg=self.theme["background"])
+        swatches.grid(row=9, column=0, columnspan=2, sticky="w", padx=SPACE_5, pady=(0, SPACE_4))
+        self.swatch_canvases = []
+        for index, colour in enumerate(CATEGORY_COLOURS):
+            canvas = tk.Canvas(
+                swatches, width=26, height=26, bg=self.theme["background"],
+                highlightthickness=0, cursor="hand2",
+            )
+            canvas.grid(row=0, column=index, padx=(0, SPACE_2))
+            canvas.bind("<Button-1>", lambda _event, value=colour: self._pick_colour(value))
+            self.swatch_canvases.append((canvas, colour))
+        self._paint_swatches()
+
+        # A card is not spending, and the form is the right place to say so
+        # rather than leaving the user to discover it from the totals.
+        tk.Label(
+            self,
+            text=(
+                "Card payments are never counted as spending. The purchases they settle "
+                "are already tracked under Subscriptions."
+            ),
+            bg=self.theme["background"],
+            fg=self.theme["text_muted"],
+            font=text_font(9),
+            justify="left",
+            wraplength=380,
+        ).grid(row=10, column=0, columnspan=2, sticky="w", padx=SPACE_5, pady=(0, SPACE_3))
+
+        actions = tk.Frame(self, bg=self.theme["background"])
+        actions.grid(row=11, column=0, columnspan=2, sticky="e", padx=SPACE_5, pady=(SPACE_2, SPACE_5))
+        PillButton(actions, "Cancel", self.destroy, self.theme, variant="tonal").grid(row=0, column=0, padx=(0, SPACE_2))
+        PillButton(actions, "Save card", self.save_card_entry, self.theme, variant="filled").grid(row=0, column=1)
+
+        # Guard against the trap that made the login dialog invisible: Tk
+        # withdraws a transient whose master is itself withdrawn.
+        if master is not None and master.winfo_viewable():
+            self.transient(master)
+
+    def _pick_colour(self, colour: str) -> None:
+        self.color_var.set(colour)
+        self._paint_swatches()
+
+    def _paint_swatches(self) -> None:
+        chosen = self.color_var.get()
+        for canvas, colour in self.swatch_canvases:
+            canvas.delete("all")
+            outline = self.theme["text"] if colour == chosen else mix(colour, "#000000", 0.2)
+            width = 3 if colour == chosen else 1
+            canvas.create_oval(2, 2, 24, 24, fill=colour, outline=outline, width=width)
+
+    def save_card_entry(self) -> None:
+        try:
+            card = create_card(
+                self.name_var.get(),
+                self.due_day_var.get(),
+                color=self.color_var.get(),
+                notes=self.notes_var.get(),
+                card_id=self.original.id if self.editing else None,
+            )
+        except ValueError as error:
+            messagebox.showwarning("Check the card", str(error))
+            return
+
+        save_card(self.data_file, card)
+        self.refresh_callback()
+        self.destroy()
 
 
 class AddExpenseDialog(tk.Toplevel):
@@ -2982,7 +3446,10 @@ class AddExpenseDialog(tk.Toplevel):
         self.color_preview.create_oval(1, 1, 24, 24, fill=color, outline=mix(color, "#000000", 0.2))
 
     def _suggested_categories(self) -> list[str]:
-        categories = ["Subscription", "Credit Card", "Utility", "Entertainment", "Food", "Other"]
+        # "Credit Card" is deliberately absent. Card payments settle purchases
+        # already recorded here, so entering one as an expense counts the same
+        # money twice. They belong in the Cards view.
+        categories = ["Subscription", "Utility", "Entertainment", "Food", "Other"]
         for expense in self.existing_expenses:
             if expense.category not in categories:
                 categories.append(expense.category)
