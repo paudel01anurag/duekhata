@@ -1,3 +1,15 @@
+> # ⚠️ Retired — this repository has moved
+>
+> **DueKhata now lives at [duekhata-subscription-tracker](https://github.com/paudel01anurag/duekhata-subscription-tracker).**
+>
+> Everything is there: the full history, every release, and all continuing work. This copy is kept
+> only so older links still lead somewhere, and it receives no further updates.
+>
+> - **To download the application:** [latest release](https://github.com/paudel01anurag/duekhata-subscription-tracker/releases/latest) — take `DueKhata.exe`
+> - **To read the code:** [duekhata-subscription-tracker](https://github.com/paudel01anurag/duekhata-subscription-tracker)
+
+---
+
 # DueKhata
 
 [![tests](https://github.com/paudel01anurag/duekhata-subscription-tracker/actions/workflows/tests.yml/badge.svg)](https://github.com/paudel01anurag/duekhata-subscription-tracker/actions/workflows/tests.yml)
