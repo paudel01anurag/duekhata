@@ -3637,21 +3637,38 @@ class AddExpenseDialog(tk.Toplevel):
         self.cadence_box.grid(row=9, column=0, sticky="w", padx=SPACE_5, pady=(0, SPACE_1))
         self.cadence_box.bind("<<ComboboxSelected>>", lambda _event: self._sync_end_date_state())
 
-        ttk.Label(self, text="Ends on").grid(row=8, column=1, sticky="w", padx=(SPACE_5, 0), pady=(0, SPACE_1))
-        self.ends_on_entry = tk.Entry(
+        # A tick rather than an empty box, because DateEntry will not stay
+        # empty: it snaps back to today when focus leaves, which would quietly
+        # turn "still running" into "ended today" and drop the subscription out
+        # of every future month.
+        # Read the stored end date before the DateEntry is built: constructing
+        # one overwrites its textvariable with today, so anything read
+        # afterwards is the widget's default rather than the saved value.
+        existing_end = _parse_date(self.ends_on_var.get())
+        self.has_end_date = tk.BooleanVar(value=existing_end is not None)
+        ttk.Checkbutton(
+            self,
+            text="Ends on a date",
+            variable=self.has_end_date,
+            command=self._sync_end_date_state,
+        ).grid(row=8, column=1, sticky="w", padx=(SPACE_5, 0), pady=(0, SPACE_1))
+
+        self.ends_on_entry = DateEntry(
             self,
             textvariable=self.ends_on_var,
-            width=20,
-            bg=self.theme["surface"],
-            fg=self.theme["text"],
-            font=text_font(10),
-            insertbackground=self.theme["input_cursor"],
-            relief="flat",
-            highlightthickness=1,
-            highlightbackground=self.theme["outline"],
-            highlightcolor=self.theme["accent"],
+            width=18,
+            date_pattern="yyyy-mm-dd",
+            background=self.theme["panel_alt"],
+            foreground=self.theme["text"],
+            bordercolor=self.theme["border"],
+            headersbackground=self.theme["list_header"],
+            selectbackground=self.theme["accent"],
+            selectforeground="#ffffff",
+            justify="left",
         )
-        self.ends_on_entry.grid(row=9, column=1, sticky="w", padx=(SPACE_5, 0), pady=(0, SPACE_1), ipady=4)
+        if existing_end is not None:
+            self.ends_on_entry.set_date(existing_end)
+        self.ends_on_entry.grid(row=9, column=1, sticky="w", padx=(SPACE_5, 0), pady=(0, SPACE_1))
 
         self.ends_on_hint = tk.Label(
             self,
@@ -3797,15 +3814,24 @@ class AddExpenseDialog(tk.Toplevel):
     def _sync_end_date_state(self) -> None:
         """A one-off payment has a single date, so an end date is meaningless."""
         is_once = self._selected_cadence() == CADENCE_ONCE
-        self.ends_on_entry.configure(state="disabled" if is_once else "normal")
         if is_once:
-            self.ends_on_var.set("")
-        self.ends_on_hint.configure(
-            text="A one-off payment happens once, on the date above."
-            if is_once
-            else "Leave “Ends on” empty while the subscription is still active; set it to the "
-            "last billing date when you cancel."
-        )
+            self.has_end_date.set(False)
+
+        enabled = self.has_end_date.get() and not is_once
+        self.ends_on_entry.configure(state="normal" if enabled else "disabled")
+        if enabled and _parse_date(self.ends_on_var.get()) is None:
+            # Give the picker something to open on rather than a stale value.
+            self.ends_on_entry.set_date(self.calendar_date)
+
+        if is_once:
+            hint = "A one-off payment happens once, on the date above."
+        elif enabled:
+            hint = ("Pick the last date it bills. Dates are year-month-day, and the box opens a "
+                    "calendar.")
+        else:
+            hint = ("Leave this unticked while the subscription is still running. Tick it when you "
+                    "cancel, and pick the last date it bills.")
+        self.ends_on_hint.configure(text=hint)
 
     def save_expense(self) -> None:
         description = self.description_var.get().strip()
@@ -3825,7 +3851,7 @@ class AddExpenseDialog(tk.Toplevel):
         self.calendar_date = start_date
 
         cadence = self._selected_cadence()
-        ends_on_text = self.ends_on_var.get().strip()
+        ends_on_text = self.ends_on_var.get().strip() if self.has_end_date.get() else ""
         ends_on = None
         if ends_on_text and cadence != CADENCE_ONCE:
             ends_on_date = _parse_date(ends_on_text)
