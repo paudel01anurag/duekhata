@@ -657,6 +657,54 @@ def get_card_payment_history(data_file: Path, card_id: str, limit: int = 12) -> 
     return [(row[0], row[1], row[2]) for row in rows]
 
 
+def get_card_year_totals(data_file: Path, year: int) -> dict:
+    """What was paid against each card across one year, keyed by card id."""
+    if data_file.suffix.lower() == ".json" or not data_file.exists():
+        return {}
+    try:
+        with _connect(data_file) as connection:
+            rows = connection.execute(
+                """
+                SELECT card_id, SUM(amount) FROM card_payments
+                WHERE paid_year = ?
+                GROUP BY card_id
+                """,
+                (year,),
+            ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    return {row[0]: round(row[1] or 0.0, 2) for row in rows}
+
+
+def get_card_payments_for_year(data_file: Path, card_id: str, year: int) -> dict:
+    """One card's twelve months, keyed by month number. Missing months absent."""
+    if data_file.suffix.lower() == ".json" or not data_file.exists():
+        return {}
+    try:
+        with _connect(data_file) as connection:
+            rows = connection.execute(
+                "SELECT paid_month, amount FROM card_payments WHERE card_id = ? AND paid_year = ?",
+                (card_id, year),
+            ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    return {row[0]: row[1] for row in rows}
+
+
+def get_card_years(data_file: Path) -> List[int]:
+    """Every year that has at least one recorded payment, newest first."""
+    if data_file.suffix.lower() == ".json" or not data_file.exists():
+        return []
+    try:
+        with _connect(data_file) as connection:
+            rows = connection.execute(
+                "SELECT DISTINCT paid_year FROM card_payments ORDER BY paid_year DESC"
+            ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    return [row[0] for row in rows]
+
+
 def get_cards_due_in_month(cards: List[Card], year: int, month: int) -> dict:
     """Cards falling due in a month, keyed by ISO date, for the calendar."""
     by_day: dict = {}

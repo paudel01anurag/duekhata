@@ -10,7 +10,7 @@ import sys
 import tkinter as tk
 from datetime import date
 from pathlib import Path
-from tkinter import colorchooser, messagebox, simpledialog, ttk
+from tkinter import colorchooser, messagebox, ttk
 from tkinter import font as tkfont
 
 from tkcalendar import DateEntry
@@ -57,6 +57,8 @@ from expense_tracker import (
     load_cards,
     save_card,
     set_card_payment,
+    get_card_payments_for_year,
+    get_card_year_totals,
 )
 
 
@@ -242,6 +244,11 @@ ALL_CADENCES = "Any"
 CARD_ROW_PREFIX = "card:"
 
 # Chart colours, warm-leaning so they sit with the palette rather than fight it.
+# Every card is drawn in the same blue. Cards are one kind of obligation, and
+# giving each its own colour turned the calendar into confetti; colour is only
+# worth spending where it distinguishes one category of spending from another.
+CARD_COLOUR = "#5b8ac7"
+
 CATEGORY_COLOURS = (
     "#b65f3c", "#5b8ac7", "#5aa469", "#c2557a",
     "#d9a441", "#3aa0b8", "#8a6bbf", "#7a8b4a",
@@ -1715,7 +1722,7 @@ class ExpenseTrackerApp:
     def _build_cards_view(self, theme: dict) -> None:
         view = self._new_view("cards", theme)
         view.columnconfigure(0, weight=1)
-        view.rowconfigure(2, weight=1)
+        view.rowconfigure(3, weight=1)
 
         intro = tk.Label(
             view,
@@ -1733,33 +1740,38 @@ class ExpenseTrackerApp:
         intro.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, SPACE_3))
         self.themed_labels.append((intro, "text_muted"))
 
+        self.card_stats_canvas = tk.Canvas(view, height=92, bg=theme["background"], highlightthickness=0)
+        self.card_stats_canvas.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, SPACE_3))
+        self.card_stats_canvas.bind("<Configure>", lambda _event: self._draw_card_stats())
+
         self.cards_summary = ttk.Label(view, text="", style="Muted.TLabel")
-        self.cards_summary.grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, SPACE_2))
+        self.cards_summary.grid(row=2, column=0, columnspan=2, sticky="w", pady=(0, SPACE_2))
 
         self.cards_list = ttk.Treeview(
             view,
-            columns=("name", "due", "this_month", "last_month", "change"),
+            columns=("name", "due", "this_month", "last_month", "change", "year"),
             show="headings",
         )
         headings = (
-            ("name", "CARD", 300, "w", True),
-            ("due", "DUE", 130, "w", False),
-            ("this_month", "THIS MONTH", 130, "e", False),
-            ("last_month", "LAST MONTH", 130, "e", False),
-            ("change", "CHANGE", 120, "e", False),
+            ("name", "CARD", 230, "w", True),
+            ("due", "DUE", 110, "w", False),
+            ("this_month", "THIS MONTH", 120, "e", False),
+            ("last_month", "LAST MONTH", 120, "e", False),
+            ("change", "VS LAST MONTH", 130, "e", False),
+            ("year", "PAID THIS YEAR", 130, "e", False),
         )
         for key, title, width, anchor, stretch in headings:
             self.cards_list.heading(key, text=title, anchor=anchor)
             self.cards_list.column(key, width=width, minwidth=80, anchor=anchor, stretch=stretch)
-        self.cards_list.grid(row=2, column=0, sticky="nsew")
+        self.cards_list.grid(row=3, column=0, sticky="nsew")
 
         scrollbar = ttk.Scrollbar(view, orient="vertical", command=self.cards_list.yview)
-        scrollbar.grid(row=2, column=1, sticky="ns")
+        scrollbar.grid(row=3, column=1, sticky="ns")
         self.cards_list.configure(yscrollcommand=scrollbar.set)
         self.cards_list.bind("<Double-1>", self.record_card_payment)
 
         actions = tk.Frame(view, bg=theme["background"])
-        actions.grid(row=3, column=0, columnspan=2, sticky="e", pady=(SPACE_3, 0))
+        actions.grid(row=4, column=0, columnspan=2, sticky="e", pady=(SPACE_3, 0))
         self.card_add_button = PillButton(
             actions, "Add card", self.open_add_card_dialog, theme, glyph=ICON_ADD
         )
@@ -1782,6 +1794,46 @@ class ExpenseTrackerApp:
             self.card_edit_button, self.card_delete_button,
         ])
 
+    def _draw_card_stats(self) -> None:
+        """Three tiles above the card list, matching the dashboard's."""
+        if not hasattr(self, "card_stats_canvas"):
+            return
+        theme = self._theme()
+        canvas = self.card_stats_canvas
+        canvas.configure(bg=theme["background"])
+        canvas.delete("all")
+        width = max(canvas.winfo_width(), 1)
+        height = max(canvas.winfo_height(), 1)
+
+        values = getattr(self, "card_stat_values", {"year": 0.0, "month": 0.0, "outstanding": 0})
+        outstanding = values["outstanding"]
+        tiles = [
+            ("PAID ON CARDS IN " + str(self.current_date.year),
+             "$" + format(values["year"], ",.2f"), theme["text"]),
+            ("PAID THIS MONTH",
+             "$" + format(values["month"], ",.2f"), theme["positive"]),
+            ("STILL TO PAY",
+             str(outstanding) + (" card" if outstanding == 1 else " cards"),
+             theme["accent"] if outstanding else theme["text_secondary"]),
+        ]
+
+        gap = SPACE_3
+        tile_width = (width - gap * (len(tiles) - 1) - 2) // len(tiles)
+        top, bottom = 5, height - 7
+        for index, (label, value, value_color) in enumerate(tiles):
+            x1 = 1 + index * (tile_width + gap)
+            x2 = x1 + tile_width
+            draw_elevation(canvas, x1, top, x2, bottom, RADIUS_CARD, theme["background"], theme["shadow"], level=1)
+            draw_rounded_rect(canvas, x1, top, x2, bottom, RADIUS_CARD, theme["surface"], theme["outline_variant"])
+            canvas.create_text(
+                x1 + SPACE_4, top + SPACE_4, text=label, anchor="nw",
+                fill=theme["text_muted"], font=text_font(8, bold=True),
+            )
+            canvas.create_text(
+                x1 + SPACE_4, top + SPACE_4 + 17, text=value, anchor="nw",
+                fill=value_color, font=display_font(19),
+            )
+
     def populate_cards_list(self) -> None:
         if not hasattr(self, "cards_list"):
             return
@@ -1792,6 +1844,7 @@ class ExpenseTrackerApp:
         previous_year, previous_month = (year, month - 1) if month > 1 else (year - 1, 12)
         this_month = get_card_payments(self.data_file, year, month)
         last_month = get_card_payments(self.data_file, previous_year, previous_month)
+        year_totals = get_card_year_totals(self.data_file, year)
 
         for card in self.cards:
             due = card_due_date(card, year, month)
@@ -1820,23 +1873,32 @@ class ExpenseTrackerApp:
                     "not yet" if paid is None else "$" + format(paid, ",.2f"),
                     "—" if previous is None else "$" + format(previous, ",.2f"),
                     change,
+                    "$" + format(year_totals.get(card.id, 0.0), ",.2f"),
                 ),
                 iid=card.id,
             )
 
         if not self.cards:
             self.cards_summary.config(text="No cards yet. Add one to keep an eye on its due date.")
+            self.card_stat_values = {"year": 0.0, "month": 0.0, "outstanding": 0}
+            self._draw_card_stats()
             return
 
-        paid_total = sum(this_month.values())
         outstanding = [card for card in self.cards if card.id not in this_month]
         word = "card" if len(self.cards) == 1 else "cards"
-        summary = str(len(self.cards)) + " " + word + "  ·  $" + format(paid_total, ",.2f") + " paid this month"
+        summary = str(len(self.cards)) + " " + word
         if outstanding:
-            summary += "  ·  still to pay: " + ", ".join(card.name for card in outstanding)
+            summary += "  ·  still to pay this month: " + ", ".join(card.name for card in outstanding)
         else:
-            summary += "  ·  all settled"
+            summary += "  ·  all settled this month"
         self.cards_summary.config(text=summary)
+
+        self.card_stat_values = {
+            "year": round(sum(year_totals.values()), 2),
+            "month": round(sum(this_month.values()), 2),
+            "outstanding": len(outstanding),
+        }
+        self._draw_card_stats()
 
     def _selected_card(self):
         selection = self.cards_list.selection()
@@ -1877,40 +1939,23 @@ class ExpenseTrackerApp:
         self.refresh_view()
 
     def record_card_payment(self, _event=None) -> None:
-        """Capture what was actually paid, which is a new number every month."""
+        """Open a card's whole year, which is the shape of the real task.
+
+        Filling in what has already been paid this year is one dialog rather
+        than twelve prompts, and it replaces a raw simpledialog that ignored
+        the application's styling entirely.
+        """
         card = self._selected_card()
         if card is None:
             messagebox.showinfo("Nothing selected", "Select a card in the list first.")
             return
 
-        year, month = self.current_date.year, self.current_date.month
-        existing = get_card_payments(self.data_file, year, month).get(card.id)
-        month_name = self.current_date.strftime("%B %Y")
-        answer = simpledialog.askstring(
-            "Record payment",
-            "What did you pay on " + card.name + " in " + month_name + "?"
-            "\n\nLeave it empty to clear the month.",
-            initialvalue="" if existing is None else format(existing, ".2f"),
-            parent=self.root,
+        dialog = CardPaymentDialog(
+            self.root, self.data_file, self.refresh_view, card,
+            self.current_date.year, theme_mode=self.theme_mode.get(),
         )
-        if answer is None:
-            return
-
-        answer = answer.strip().lstrip("$").replace(",", "")
-        if not answer:
-            set_card_payment(self.data_file, card.id, year, month, None)
-            self.refresh_view()
-            return
-        try:
-            amount = float(answer)
-        except ValueError:
-            messagebox.showerror("Not a number", "'" + answer + "' is not an amount I can record.")
-            return
-        if amount < 0:
-            messagebox.showerror("Not an amount", "A payment cannot be negative.")
-            return
-        set_card_payment(self.data_file, card.id, year, month, amount)
-        self.refresh_view()
+        dialog.grab_set()
+        self.root.wait_window(dialog)
 
     # --- calendar -----------------------------------------------------
     def _build_calendar_view(self, theme: dict) -> None:
@@ -3062,6 +3107,185 @@ class ExpenseTrackerApp:
         self.root.wait_window(dialog)
 
 
+class CardPaymentDialog(tk.Toplevel):
+    """A whole year of one card's payments, in the application's own styling.
+
+    This replaces a raw simpledialog prompt, which asked for one month at a
+    time in unstyled Tk. A year at once is also the right shape for the real
+    task: filling in what has already been paid so far this year.
+    """
+
+    MONTH_NAMES = (
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December",
+    )
+
+    def __init__(
+        self,
+        master: tk.Tk,
+        data_file: Path,
+        refresh_callback,
+        card,
+        year: int,
+        theme_mode: str = "light",
+    ) -> None:
+        super().__init__(master)
+        self.data_file = data_file
+        self.refresh_callback = refresh_callback
+        self.card = card
+        self.year = year
+        self.theme = WARM_DARK if theme_mode == "dark" else WARM_LIGHT
+        self.title("Payments · " + card.name)
+        self.configure(bg=self.theme["background"])
+        self.resizable(False, False)
+        self.option_add("*insertBackground", self.theme["input_cursor"])
+
+        header = tk.Frame(self, bg=self.theme["background"])
+        header.grid(row=0, column=0, columnspan=4, sticky="ew", padx=SPACE_5, pady=(SPACE_5, SPACE_2))
+        tk.Label(
+            header,
+            text=card.name,
+            bg=self.theme["background"],
+            fg=self.theme["text"],
+            font=display_font(16),
+        ).pack(side="left", anchor="w")
+
+        self.year_var = tk.StringVar(value=str(year))
+        year_box = ttk.Combobox(
+            header, textvariable=self.year_var, state="readonly", width=6,
+            values=[str(y) for y in range(date.today().year - 5, date.today().year + 2)],
+        )
+        year_box.pack(side="right")
+        year_box.bind("<<ComboboxSelected>>", self._change_year)
+
+        tk.Label(
+            self,
+            text=(
+                "Enter what you actually paid in each month. Leave a month empty if you did not pay "
+                "it, or to clear one you recorded before."
+            ),
+            bg=self.theme["background"],
+            fg=self.theme["text_muted"],
+            font=text_font(9),
+            justify="left",
+            wraplength=430,
+        ).grid(row=1, column=0, columnspan=4, sticky="w", padx=SPACE_5, pady=(0, SPACE_4))
+
+        # Two columns of six months, so the dialog stays a sensible height.
+        self.month_vars = {}
+        grid = tk.Frame(self, bg=self.theme["background"])
+        grid.grid(row=2, column=0, columnspan=4, sticky="ew", padx=SPACE_5)
+        for index, name in enumerate(self.MONTH_NAMES):
+            column = 0 if index < 6 else 2
+            row = index if index < 6 else index - 6
+            tk.Label(
+                grid,
+                text=name,
+                bg=self.theme["background"],
+                fg=self.theme["text_secondary"],
+                font=text_font(10),
+                width=10,
+                anchor="w",
+            ).grid(row=row, column=column, sticky="w", pady=SPACE_1, padx=(0, SPACE_2))
+
+            variable = tk.StringVar()
+            self.month_vars[index + 1] = variable
+            entry = tk.Entry(
+                grid,
+                textvariable=variable,
+                width=11,
+                bg=self.theme["surface"],
+                fg=self.theme["text"],
+                font=text_font(10),
+                insertbackground=self.theme["input_cursor"],
+                relief="flat",
+                highlightthickness=1,
+                highlightbackground=self.theme["outline"],
+                highlightcolor=self.theme["accent"],
+                justify="right",
+            )
+            entry.grid(row=row, column=column + 1, sticky="w", pady=SPACE_1,
+                       padx=(0, SPACE_5 if column == 0 else 0), ipady=4)
+
+        self.total_label = tk.Label(
+            self,
+            text="",
+            bg=self.theme["background"],
+            fg=self.theme["text"],
+            font=text_font(10, bold=True),
+        )
+        self.total_label.grid(row=3, column=0, columnspan=4, sticky="w", padx=SPACE_5, pady=(SPACE_4, 0))
+
+        actions = tk.Frame(self, bg=self.theme["background"])
+        actions.grid(row=4, column=0, columnspan=4, sticky="e", padx=SPACE_5, pady=(SPACE_3, SPACE_5))
+        PillButton(actions, "Cancel", self.destroy, self.theme, variant="tonal").grid(row=0, column=0, padx=(0, SPACE_2))
+        PillButton(actions, "Save payments", self.save_payments, self.theme, variant="filled").grid(row=0, column=1)
+
+        self._load_year()
+        for variable in self.month_vars.values():
+            variable.trace_add("write", lambda *_args: self._update_total())
+        self._update_total()
+
+        if master is not None and master.winfo_viewable():
+            self.transient(master)
+
+    def _load_year(self) -> None:
+        recorded = get_card_payments_for_year(self.data_file, self.card.id, self.year)
+        for month, variable in self.month_vars.items():
+            amount = recorded.get(month)
+            variable.set("" if amount is None else format(amount, ".2f"))
+
+    def _change_year(self, _event=None) -> None:
+        """Switching year discards nothing: the previous year is already saved."""
+        self.year = int(self.year_var.get())
+        self._load_year()
+        self._update_total()
+
+    def _parse(self, text: str):
+        """Returns (ok, value). An empty field is a valid instruction to clear."""
+        cleaned = text.strip().lstrip("$").replace(",", "")
+        if not cleaned:
+            return True, None
+        try:
+            value = float(cleaned)
+        except ValueError:
+            return False, None
+        if value < 0:
+            return False, None
+        return True, round(value, 2)
+
+    def _update_total(self) -> None:
+        total = 0.0
+        months = 0
+        for variable in self.month_vars.values():
+            ok, value = self._parse(variable.get())
+            if ok and value is not None:
+                total += value
+                months += 1
+        word = "month" if months == 1 else "months"
+        self.total_label.config(
+            text=str(self.year) + " so far:  $" + format(total, ",.2f") + "  across " + str(months) + " " + word
+        )
+
+    def save_payments(self) -> None:
+        parsed = {}
+        for month, variable in self.month_vars.items():
+            ok, value = self._parse(variable.get())
+            if not ok:
+                messagebox.showwarning(
+                    "Check that amount",
+                    "'" + variable.get().strip() + "' in " + self.MONTH_NAMES[month - 1]
+                    + " is not an amount I can record.",
+                )
+                return
+            parsed[month] = value
+
+        for month, value in parsed.items():
+            set_card_payment(self.data_file, self.card.id, self.year, month, value)
+        self.refresh_callback()
+        self.destroy()
+
+
 class CardDialog(tk.Toplevel):
     """Add or edit a credit card.
 
@@ -3090,7 +3314,7 @@ class CardDialog(tk.Toplevel):
         self.name_var = tk.StringVar(value=card.name if self.editing else "")
         self.due_day_var = tk.StringVar(value=str(card.due_day) if self.editing else "1")
         self.notes_var = tk.StringVar(value=card.notes if self.editing else "")
-        self.color_var = tk.StringVar(value=card.color if self.editing else "#5b8ac7")
+        self.color_var = tk.StringVar(value=card.color if self.editing else CARD_COLOUR)
 
         self.configure(bg=self.theme["background"])
         self.resizable(False, False)
@@ -3153,11 +3377,29 @@ class CardDialog(tk.Toplevel):
             highlightcolor=self.theme["accent"],
         ).grid(row=7, column=0, columnspan=2, sticky="ew", padx=SPACE_5, pady=(0, SPACE_3), ipady=7)
 
-        ttk.Label(self, text="Colour").grid(row=8, column=0, columnspan=2, sticky="w", padx=SPACE_5, pady=(0, SPACE_1))
+        # Cards share one colour so a month of due dates reads as one kind of
+        # thing. The palette stays available for the odd card that genuinely
+        # needs to stand out, but it is folded away rather than offered.
+        ttk.Label(self, text="Colour").grid(row=8, column=0, sticky="w", padx=SPACE_5, pady=(0, SPACE_1))
+        colour_row = tk.Frame(self, bg=self.theme["background"])
+        colour_row.grid(row=9, column=0, columnspan=2, sticky="w", padx=SPACE_5, pady=(0, SPACE_2))
+
+        self.colour_preview = tk.Canvas(
+            colour_row, width=26, height=26, bg=self.theme["background"], highlightthickness=0
+        )
+        self.colour_preview.pack(side="left", padx=(0, SPACE_3))
+
+        self.colour_toggle = PillButton(
+            colour_row, "Use a different colour", self._toggle_swatches, self.theme,
+            variant="outlined", height=30,
+        )
+        self.colour_toggle.pack(side="left")
+
         swatches = tk.Frame(self, bg=self.theme["background"])
-        swatches.grid(row=9, column=0, columnspan=2, sticky="w", padx=SPACE_5, pady=(0, SPACE_4))
+        swatches.grid(row=10, column=0, columnspan=2, sticky="w", padx=SPACE_5, pady=(0, SPACE_3))
+        self.swatch_frame = swatches
         self.swatch_canvases = []
-        for index, colour in enumerate(CATEGORY_COLOURS):
+        for index, colour in enumerate((CARD_COLOUR,) + tuple(c for c in CATEGORY_COLOURS if c != CARD_COLOUR)):
             canvas = tk.Canvas(
                 swatches, width=26, height=26, bg=self.theme["background"],
                 highlightthickness=0, cursor="hand2",
@@ -3165,6 +3407,11 @@ class CardDialog(tk.Toplevel):
             canvas.grid(row=0, column=index, padx=(0, SPACE_2))
             canvas.bind("<Button-1>", lambda _event, value=colour: self._pick_colour(value))
             self.swatch_canvases.append((canvas, colour))
+
+        # Only unfolded when an existing card already departs from the default.
+        self.swatches_visible = self.editing and self.color_var.get() != CARD_COLOUR
+        if not self.swatches_visible:
+            swatches.grid_remove()
         self._paint_swatches()
 
         # A card is not spending, and the form is the right place to say so
@@ -3180,10 +3427,10 @@ class CardDialog(tk.Toplevel):
             font=text_font(9),
             justify="left",
             wraplength=380,
-        ).grid(row=10, column=0, columnspan=2, sticky="w", padx=SPACE_5, pady=(0, SPACE_3))
+        ).grid(row=11, column=0, columnspan=2, sticky="w", padx=SPACE_5, pady=(0, SPACE_3))
 
         actions = tk.Frame(self, bg=self.theme["background"])
-        actions.grid(row=11, column=0, columnspan=2, sticky="e", padx=SPACE_5, pady=(SPACE_2, SPACE_5))
+        actions.grid(row=12, column=0, columnspan=2, sticky="e", padx=SPACE_5, pady=(SPACE_2, SPACE_5))
         PillButton(actions, "Cancel", self.destroy, self.theme, variant="tonal").grid(row=0, column=0, padx=(0, SPACE_2))
         PillButton(actions, "Save card", self.save_card_entry, self.theme, variant="filled").grid(row=0, column=1)
 
@@ -3192,12 +3439,27 @@ class CardDialog(tk.Toplevel):
         if master is not None and master.winfo_viewable():
             self.transient(master)
 
+    def _toggle_swatches(self) -> None:
+        self.swatches_visible = not self.swatches_visible
+        if self.swatches_visible:
+            self.swatch_frame.grid()
+            self.colour_toggle.set_text("Use the usual colour")
+        else:
+            self.swatch_frame.grid_remove()
+            self.color_var.set(CARD_COLOUR)
+            self.colour_toggle.set_text("Use a different colour")
+            self._paint_swatches()
+
     def _pick_colour(self, colour: str) -> None:
         self.color_var.set(colour)
         self._paint_swatches()
 
     def _paint_swatches(self) -> None:
         chosen = self.color_var.get()
+        self.colour_preview.delete("all")
+        self.colour_preview.create_oval(
+            2, 2, 24, 24, fill=chosen, outline=mix(chosen, "#000000", 0.25), width=1
+        )
         for canvas, colour in self.swatch_canvases:
             canvas.delete("all")
             outline = self.theme["text"] if colour == chosen else mix(colour, "#000000", 0.2)

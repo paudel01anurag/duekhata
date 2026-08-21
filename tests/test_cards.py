@@ -5,6 +5,9 @@ from pathlib import Path
 
 from expense_tracker import (
     card_due_date,
+    get_card_year_totals,
+    get_card_payments_for_year,
+    get_card_years,
     create_card,
     create_expense,
     create_schema,
@@ -102,6 +105,35 @@ class CardModelTests(unittest.TestCase):
         self._card("Chase", 2)
         upcoming = get_cards_due_between(load_cards(self.data_file), date(2026, 8, 25), days=14)
         self.assertEqual([day for day, _card in upcoming], [date(2026, 9, 2)])
+
+    def test_a_year_of_payments_can_be_backfilled_and_totalled(self) -> None:
+        card = self._card()
+        for month, amount in ((1, 301.0), (2, 302.0), (3, 303.0)):
+            set_card_payment(self.data_file, card.id, 2026, month, amount)
+
+        self.assertEqual(
+            get_card_payments_for_year(self.data_file, card.id, 2026),
+            {1: 301.0, 2: 302.0, 3: 303.0},
+        )
+        self.assertEqual(get_card_year_totals(self.data_file, 2026), {card.id: 906.0})
+
+    def test_year_totals_keep_the_years_apart(self) -> None:
+        card = self._card()
+        set_card_payment(self.data_file, card.id, 2025, 12, 100.0)
+        set_card_payment(self.data_file, card.id, 2026, 1, 250.0)
+
+        self.assertEqual(get_card_year_totals(self.data_file, 2026), {card.id: 250.0})
+        self.assertEqual(get_card_year_totals(self.data_file, 2025), {card.id: 100.0})
+        self.assertEqual(get_card_years(self.data_file), [2026, 2025])
+
+    def test_year_totals_add_every_card_together(self) -> None:
+        first = self._card("Chase", 4)
+        second = self._card("Discover", 20)
+        set_card_payment(self.data_file, first.id, 2026, 1, 100.0)
+        set_card_payment(self.data_file, second.id, 2026, 1, 50.0)
+
+        totals = get_card_year_totals(self.data_file, 2026)
+        self.assertEqual(round(sum(totals.values()), 2), 150.0)
 
     def test_cards_never_reach_a_spending_total(self) -> None:
         """The whole point: a card payment must not be counted as spending."""
