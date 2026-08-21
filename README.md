@@ -23,7 +23,7 @@ anything is wrong with it. Fuller notes are in [TESTERS.txt](TESTERS.txt).
 
 Everything is stored locally. There is no account, no server, and no network access of any kind.
 
-![The dashboard, showing monthly totals, spending by category, and upcoming payments](docs/dashboard.png)
+![The DueKhata dashboard: what bills this month and what the subscriptions cost per month on average, spending by category, and what is due in the next fortnight](docs/dashboard.png)
 
 ## Features
 
