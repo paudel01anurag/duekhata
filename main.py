@@ -3819,9 +3819,16 @@ class AddExpenseDialog(tk.Toplevel):
 
         enabled = self.has_end_date.get() and not is_once
         self.ends_on_entry.configure(state="normal" if enabled else "disabled")
-        if enabled and _parse_date(self.ends_on_var.get()) is None:
-            # Give the picker something to open on rather than a stale value.
-            self.ends_on_entry.set_date(self.calendar_date)
+        if enabled:
+            if _parse_date(self.ends_on_var.get()) is None:
+                # Give the picker something to open on rather than a stale value.
+                self.ends_on_entry.set_date(self.calendar_date)
+        else:
+            # Show nothing rather than today. A date sitting in a disabled box
+            # reads as an end date that has been set. Safe to clear here because
+            # a disabled widget cannot take focus, and it is focus-out that
+            # makes a DateEntry restore itself.
+            self.ends_on_var.set("")
 
         if is_once:
             hint = "A one-off payment happens once, on the date above."
