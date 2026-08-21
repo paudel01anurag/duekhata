@@ -1185,14 +1185,12 @@ class ExpenseTrackerApp:
         self.expenses = load_expenses(self.data_file)
         self.current_date = date.today().replace(day=1)
         self.selected_date = date.today()
-        self.account_filter = tk.StringVar(value="All accounts")
         self.theme_mode = tk.StringVar(value="light")
         self.paid_expense_ids: set[str] = set()
         self.day_summary_text = ""
         resolve_fonts(self.root)
         self.calendar_font = tkfont.Font(self.root, font=text_font(8))
         self.themed_buttons: list[_StatefulCanvasButton] = []
-        self.group_field = "category"
         self.chart_style = "donut"
         self.stat_values = {"projected": 0.0, "remaining": 0.0, "paid": 0.0, "yearly": 0.0}
         self._apply_theme()
@@ -1468,7 +1466,7 @@ class ExpenseTrackerApp:
     # Layout
     #
     # A sidebar selects one of four views, which are stacked in the same grid
-    # cell and raised as needed. The month totals and the account filter are
+    # cell and raised as needed. The month totals are
     # shared chrome, so they live outside the views and stay put while switching.
     # ------------------------------------------------------------------
 
@@ -1556,18 +1554,8 @@ class ExpenseTrackerApp:
         controls = tk.Frame(bar, bg=theme["background"])
         controls.grid(row=0, column=2, sticky="e")
 
-        self.account_box = ttk.Combobox(
-            controls,
-            textvariable=self.account_filter,
-            state="readonly",
-            width=16,
-            font=text_font(10),
-        )
-        self.account_box.grid(row=0, column=0, padx=(0, SPACE_2))
-        self.account_box.bind("<<ComboboxSelected>>", lambda _event: self.refresh_view())
-
         self.add_button = PillButton(controls, "Add payment", self.open_add_dialog, theme, glyph=ICON_ADD)
-        self.add_button.grid(row=0, column=1)
+        self.add_button.grid(row=0, column=0)
         self.themed_buttons.append(self.add_button)
 
         self.subtitle_label = ttk.Label(bar, text="", style="Muted.TLabel")
@@ -1659,16 +1647,15 @@ class ExpenseTrackerApp:
 
         self.all_list = ttk.Treeview(
             view,
-            columns=("description", "amount", "cadence", "next", "account", "category"),
+            columns=("description", "amount", "cadence", "next", "category"),
             show="headings",
         )
         headings = (
-            ("description", "DESCRIPTION", 210, "w", True),
+            ("description", "DESCRIPTION", 300, "w", True),
             ("amount", "AMOUNT", 95, "e", False),
             ("cadence", "REPEATS", 100, "w", False),
             ("next", "NEXT DUE", 120, "w", False),
-            ("account", "ACCOUNT", 110, "w", False),
-            ("category", "CATEGORY", 130, "w", False),
+            ("category", "CATEGORY", 140, "w", False),
         )
         for key, title, width, anchor, stretch in headings:
             self.all_list.heading(key, text=title, anchor=anchor)
@@ -1743,19 +1730,17 @@ class ExpenseTrackerApp:
 
         self.details_list = ttk.Treeview(
             self.details_frame,
-            columns=("description", "amount", "account", "status"),
+            columns=("description", "amount", "status"),
             show="headings",
             height=12,
         )
         self.details_list.heading("description", text="DESCRIPTION", anchor="w")
         self.details_list.heading("amount", text="AMOUNT", anchor="e")
-        self.details_list.heading("account", text="ACCOUNT", anchor="w")
         self.details_list.heading("status", text="STATUS", anchor="center")
         # These must total less than DETAILS_WIDTH minus the scrollbar, or the
         # last column is clipped off the edge of the panel.
-        self.details_list.column("description", width=118, minwidth=90, anchor="w", stretch=True)
+        self.details_list.column("description", width=192, minwidth=110, anchor="w", stretch=True)
         self.details_list.column("amount", width=72, minwidth=64, anchor="e", stretch=False)
-        self.details_list.column("account", width=74, minwidth=62, anchor="w", stretch=False)
         self.details_list.column("status", width=68, minwidth=60, anchor="center", stretch=False)
         self.details_list.grid(row=2, column=0, sticky="nsew")
 
@@ -1791,15 +1776,7 @@ class ExpenseTrackerApp:
 
         controls = tk.Frame(view, bg=theme["background"])
         controls.grid(row=0, column=0, sticky="ew", pady=(0, SPACE_3))
-        controls.columnconfigure(2, weight=1)
-
-        self.group_control = SegmentedControl(
-            controls,
-            (("category", "By category"), ("account", "By account")),
-            self._set_group_field,
-            theme,
-        )
-        self.group_control.grid(row=0, column=0, padx=(0, SPACE_3))
+        controls.columnconfigure(1, weight=1)
 
         self.style_control = SegmentedControl(
             controls,
@@ -1807,8 +1784,8 @@ class ExpenseTrackerApp:
             self._set_chart_style,
             theme,
         )
-        self.style_control.grid(row=0, column=1, sticky="w")
-        self.themed_buttons.extend([self.group_control, self.style_control])
+        self.style_control.grid(row=0, column=0, sticky="w")
+        self.themed_buttons.append(self.style_control)
 
         self.trend_canvas = tk.Canvas(view, bg=theme["background"], highlightthickness=0)
         self.trend_canvas.grid(row=1, column=0, sticky="nsew")
@@ -1933,7 +1910,7 @@ class ExpenseTrackerApp:
         canvas = self.category_canvas
 
         rows = get_category_totals(
-            self.expenses, self.current_date.year, self.current_date.month, self.account_filter.get()
+            self.expenses, self.current_date.year, self.current_date.month
         )
         if not rows:
             canvas.create_text(
@@ -1979,7 +1956,7 @@ class ExpenseTrackerApp:
         canvas = self.upcoming_canvas
 
         today = date.today()
-        entries = get_upcoming(self.expenses, today, days=14, account=self.account_filter.get())
+        entries = get_upcoming(self.expenses, today, days=14)
         if not entries:
             canvas.create_text(
                 left, top + 8, text="Nothing due in the next two weeks.", anchor="nw",
@@ -2031,7 +2008,7 @@ class ExpenseTrackerApp:
         theme = self._theme()
         left, top, right, bottom = box
 
-        totals = get_monthly_totals(self.expenses, year, self.account_filter.get())
+        totals = get_monthly_totals(self.expenses, year)
         largest = max(totals) or 1.0
         baseline = bottom - 20
         usable = max(20, baseline - top - 28)
@@ -2066,7 +2043,7 @@ class ExpenseTrackerApp:
         if not hasattr(self, "breakdown_canvas"):
             return
         year = self.current_date.year
-        heading = "SHARE BY " + ("CATEGORY" if self.group_field == "category" else "ACCOUNT")
+        heading = "SHARE BY CATEGORY"
         box = self._draw_card(self.breakdown_canvas, heading, f"{year} TOTAL")
         if box == (0, 0, 0, 0):
             return
@@ -2076,9 +2053,7 @@ class ExpenseTrackerApp:
 
         yearly: dict = {}
         for month in range(1, 13):
-            for name, value in get_totals_by(
-                self.expenses, year, month, self.group_field, self.account_filter.get()
-            ):
+            for name, value in get_totals_by(self.expenses, year, month):
                 yearly[name] = yearly.get(name, 0.0) + value
         rows = sorted(yearly.items(), key=lambda item: -item[1])
         total = sum(value for _name, value in rows)
@@ -2172,20 +2147,9 @@ class ExpenseTrackerApp:
     def _available_categories(self) -> list[str]:
         return sorted({expense.category for expense in self.expenses if expense.category})
 
-    def _set_group_field(self, field: str) -> None:
-        self.group_field = field
-        self._draw_breakdown()
-
     def _set_chart_style(self, style: str) -> None:
         self.chart_style = style
         self._draw_breakdown()
-
-    def _available_accounts(self) -> list[str]:
-        accounts = ["All accounts", "Main", "Spouse", "Shared"]
-        for expense in self.expenses:
-            if expense.account not in accounts:
-                accounts.append(expense.account)
-        return accounts
 
     def _format_total_rows(self, projected: float, remaining: float) -> tuple[str, str]:
         return (
@@ -2236,32 +2200,27 @@ class ExpenseTrackerApp:
 
     def refresh_view(self) -> None:
         self.expenses = load_expenses(self.data_file)
-        self.paid_expense_ids = get_paid_expense_ids(self.data_file, self.current_date.year, self.current_date.month, self.account_filter.get())
+        self.paid_expense_ids = get_paid_expense_ids(self.data_file, self.current_date.year, self.current_date.month)
         self._refresh_theme_button()
 
-        self.account_box["values"] = self._available_accounts()
-        if self.account_filter.get() not in self.account_box["values"]:
-            self.account_filter.set("All accounts")
-        self.account_box.set(self.account_filter.get() or "All accounts")
         self.month_label.config(text=self.current_date.strftime("%B %Y"))
 
-        projected_total = get_total_for_month(self.expenses, self.current_date.year, self.current_date.month, self.account_filter.get())
+        projected_total = get_total_for_month(self.expenses, self.current_date.year, self.current_date.month)
         paid_total = get_paid_total_for_month(
             self.expenses,
             self.paid_expense_ids,
             self.current_date.year,
             self.current_date.month,
-            self.account_filter.get(),
         )
         remaining_total = round(projected_total - paid_total, 2)
         self.stat_values = {
             "projected": projected_total,
             "remaining": remaining_total,
             "paid": paid_total,
-            "yearly": get_yearly_total(self.expenses, self.current_date.year, self.account_filter.get()),
+            "yearly": get_yearly_total(self.expenses, self.current_date.year),
         }
 
-        day_expenses = get_expenses_for_day(self.expenses, self.selected_date, self.account_filter.get())
+        day_expenses = get_expenses_for_day(self.expenses, self.selected_date)
         day_total = sum(expense.amount or 0 for expense in day_expenses)
         day_paid = sum(expense.amount or 0 for expense in day_expenses if expense.id in self.paid_expense_ids)
         entry_word = "subscription" if len(day_expenses) == 1 else "subscriptions"
@@ -2474,7 +2433,7 @@ class ExpenseTrackerApp:
             label.grid(row=0, column=index, sticky="ew", padx=SPACE_1, pady=(0, SPACE_2))
 
         month_calendar = calendar.monthcalendar(self.current_date.year, self.current_date.month)
-        day_map = get_expenses_by_day(self.expenses, self.current_date.year, self.current_date.month, self.account_filter.get())
+        day_map = get_expenses_by_day(self.expenses, self.current_date.year, self.current_date.month)
         today = date.today()
         row = 1
         for week in month_calendar:
@@ -2534,17 +2493,15 @@ class ExpenseTrackerApp:
 
         detail_list = ttk.Treeview(
             list_frame,
-            columns=("description", "amount", "account", "status"),
+            columns=("description", "amount", "status"),
             show="headings",
             height=12,
         )
         detail_list.heading("description", text="Description")
         detail_list.heading("amount", text="Amount")
-        detail_list.heading("account", text="Account")
         detail_list.heading("status", text="Status")
-        detail_list.column("description", width=280, minwidth=180, anchor="w", stretch=True)
+        detail_list.column("description", width=410, minwidth=180, anchor="w", stretch=True)
         detail_list.column("amount", width=90, minwidth=80, anchor="e", stretch=False)
-        detail_list.column("account", width=130, minwidth=100, anchor="w", stretch=True)
         detail_list.column("status", width=90, minwidth=80, anchor="center", stretch=False)
         detail_list.grid(row=0, column=0, sticky="nsew")
         scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=detail_list.yview)
@@ -2556,7 +2513,7 @@ class ExpenseTrackerApp:
             status_text = "Paid" if expense.id in self.paid_expense_ids else "Pending"
             detail_list.insert(
                 "", "end",
-                values=(self._describe(expense), amount_text, expense.account, status_text),
+                values=(self._describe(expense), amount_text, status_text),
                 iid=expense.id,
             )
 
@@ -2580,7 +2537,7 @@ class ExpenseTrackerApp:
         for row_id in self.details_list.get_children():
             self.details_list.delete(row_id)
 
-        expenses = get_expenses_for_day(self.expenses, self.selected_date, self.account_filter.get())
+        expenses = get_expenses_for_day(self.expenses, self.selected_date)
         theme = self._theme()
         for index, expense in enumerate(expenses):
             amount_text = "Planned" if expense.amount is None else f"${expense.amount:.2f}"
@@ -2590,7 +2547,7 @@ class ExpenseTrackerApp:
             self.details_list.insert(
                 "",
                 "end",
-                values=(description, amount_text, expense.account, status_text),
+                values=(description, amount_text, status_text),
                 iid=expense.id,
             )
             if index % 2 == 1:
@@ -2690,7 +2647,6 @@ class ExpenseTrackerApp:
         for row_id in self.all_list.get_children():
             self.all_list.delete(row_id)
 
-        account = self.account_filter.get()
         search = self.search_var.get().strip().lower()
         wanted_category = self.category_filter.get()
         wanted_cadence = self.cadence_filter.get()
@@ -2703,8 +2659,6 @@ class ExpenseTrackerApp:
 
         rows = []
         for expense in self.expenses:
-            if account and account != "All accounts" and expense.account != account:
-                continue
             if wanted_category != ALL_CATEGORIES and expense.category != wanted_category:
                 continue
             if wanted_cadence != ALL_CADENCES:
@@ -2733,7 +2687,7 @@ class ExpenseTrackerApp:
                 "",
                 "end",
                 iid=expense.id,
-                values=(expense.description, amount, cadence, due, expense.account, expense.category),
+                values=(expense.description, amount, cadence, due, expense.category),
             )
 
         total = len([e for e in self.expenses if e.amount is not None])
@@ -2837,7 +2791,6 @@ class AddExpenseDialog(tk.Toplevel):
         )
         self.date_var = tk.StringVar(value=start_date.strftime("%Y-%m-%d"))
         self.calendar_date = start_date
-        self.account_var = tk.StringVar(value=expense.account if self.editing else "Main")
         self.category_var = tk.StringVar(value=expense.category if self.editing else "Subscription")
         self.expense_type_var = tk.StringVar(value=expense.expense_type if self.editing else "Fixed")
         self.color_var = tk.StringVar(value=(expense.color if self.editing else "#f2c14e"))
@@ -2908,21 +2861,16 @@ class AddExpenseDialog(tk.Toplevel):
         self.date_entry.set_date(self.calendar_date)
         self.date_entry.bind("<<DateEntrySelected>>", self._sync_calendar_date)
 
-        ttk.Label(self, text="Account").grid(row=5, column=0, sticky="w", padx=SPACE_5, pady=(0, SPACE_1))
-        account_box = ttk.Combobox(self, textvariable=self.account_var, state="normal", width=20)
-        account_box["values"] = self._suggested_accounts()
-        account_box.grid(row=6, column=0, sticky="w", padx=SPACE_5, pady=(0, SPACE_1))
-
-        ttk.Label(self, text="Category").grid(row=5, column=1, sticky="w", padx=(SPACE_5, 0), pady=(0, SPACE_1))
+        ttk.Label(self, text="Category").grid(row=5, column=0, sticky="w", padx=SPACE_5, pady=(0, SPACE_1))
         category_box = ttk.Combobox(self, textvariable=self.category_var, state="normal", width=20)
         category_box["values"] = self._suggested_categories()
-        category_box.grid(row=6, column=1, sticky="w", padx=(SPACE_5, 0), pady=(0, SPACE_1))
+        category_box.grid(row=6, column=0, sticky="w", padx=SPACE_5, pady=(0, SPACE_1))
 
-        # Both fields accept free text; without a caption they look read-only
-        # like the Type field beneath them.
+        # The field accepts free text; without a caption it looks read-only
+        # like the Type field beneath it.
         tk.Label(
             self,
-            text="Pick a suggestion or type your own — new ones are remembered.",
+            text="Pick a category or type your own — new ones are remembered.",
             bg=self.theme["background"],
             fg=self.theme["text_muted"],
             font=text_font(9),
@@ -3033,13 +2981,6 @@ class AddExpenseDialog(tk.Toplevel):
         color = self.color_var.get()
         self.color_preview.create_oval(1, 1, 24, 24, fill=color, outline=mix(color, "#000000", 0.2))
 
-    def _suggested_accounts(self) -> list[str]:
-        accounts = ["Main", "Spouse", "Shared"]
-        for expense in self.existing_expenses:
-            if expense.account not in accounts:
-                accounts.append(expense.account)
-        return accounts
-
     def _suggested_categories(self) -> list[str]:
         categories = ["Subscription", "Credit Card", "Utility", "Entertainment", "Food", "Other"]
         for expense in self.existing_expenses:
@@ -3146,7 +3087,6 @@ class AddExpenseDialog(tk.Toplevel):
             description=description,
             amount=amount,
             expense_date=start_date.isoformat(),
-            account=self.account_var.get().strip() or "Main",
             category=self.category_var.get().strip() or "Other",
             due_day=due_day,
             expense_type=self.expense_type_var.get().strip() or "Fixed",

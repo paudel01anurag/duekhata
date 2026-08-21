@@ -43,6 +43,10 @@ class Expense:
     description: str
     amount: Optional[float]
     date: str
+    # The application used to filter by account (Main / Spouse / Shared). Real
+    # use showed nobody ever switched it, so the filter is gone. The field is
+    # kept and defaulted so no stored data is destroyed and the idea could come
+    # back without a migration.
     account: str
     category: str
     recurring_monthly: bool = False
@@ -464,8 +468,8 @@ def create_expense(
     description: str,
     amount: Optional[float],
     expense_date: str,
-    account: str,
-    category: str,
+    account: str = "Main",
+    category: str = "General",
     recurring_monthly: bool = False,
     due_day: Optional[int] = None,
     expense_type: str = "Fixed",
@@ -572,34 +576,30 @@ def _is_in_target_month(expense: Expense, year: int, month: int) -> bool:
     return bool(occurrences_in_month(expense, year, month))
 
 
-def get_expenses_for_month(expenses: List[Expense], year: int, month: int, account: Optional[str] = None) -> List[Expense]:
+def get_expenses_for_month(expenses: List[Expense], year: int, month: int) -> List[Expense]:
     month_expenses = [expense for expense in expenses if _is_in_target_month(expense, year, month)]
-    if account and account != "All accounts":
-        month_expenses = [expense for expense in month_expenses if expense.account == account]
-
     return sorted(
         month_expenses,
         key=lambda item: (
             item.date or "",
             item.due_day if item.due_day is not None else 0,
-            item.account,
             item.description.lower(),
         ),
     )
 
 
-def get_total_for_month(expenses: List[Expense], year: int, month: int, account: Optional[str] = None) -> float:
+def get_total_for_month(expenses: List[Expense], year: int, month: int) -> float:
     # A weekly subscription bills several times a month, so the month's cost is
     # the amount multiplied by how often it actually falls due.
     total = 0.0
-    for expense in get_expenses_for_month(expenses, year, month, account):
+    for expense in get_expenses_for_month(expenses, year, month):
         if expense.amount is not None:
             total += expense.amount * len(occurrences_in_month(expense, year, month))
     return round(total, 2)
 
 
-def get_yearly_total(expenses: List[Expense], year: int, account: Optional[str] = None) -> float:
-    return round(sum(get_total_for_month(expenses, year, month, account) for month in range(1, 13)), 2)
+def get_yearly_total(expenses: List[Expense], year: int) -> float:
+    return round(sum(get_total_for_month(expenses, year, month) for month in range(1, 13)), 2)
 
 
 def next_occurrence(expense: Expense, start: date, horizon_days: int = 800):
@@ -619,12 +619,11 @@ def next_occurrence(expense: Expense, start: date, horizon_days: int = 800):
     return None
 
 
-GROUP_FIELDS = ("category", "account")
+GROUP_FIELDS = ("category",)
 
 
 def get_totals_by(
     expenses: List[Expense], year: int, month: int, field: str = "category",
-    account: Optional[str] = None,
 ) -> List[tuple]:
     """Spend for one month grouped by `field`, largest first.
 
@@ -635,7 +634,7 @@ def get_totals_by(
         raise ValueError(f"cannot group by {field!r}; expected one of {GROUP_FIELDS}")
 
     totals: dict = {}
-    for expense in get_expenses_for_month(expenses, year, month, account):
+    for expense in get_expenses_for_month(expenses, year, month):
         if expense.amount is None:
             continue
         occurrences = len(occurrences_in_month(expense, year, month))
@@ -647,46 +646,33 @@ def get_totals_by(
     return ranked
 
 
-def get_category_totals(
-    expenses: List[Expense], year: int, month: int, account: Optional[str] = None
-) -> List[tuple]:
-    return get_totals_by(expenses, year, month, "category", account)
+def get_category_totals(expenses: List[Expense], year: int, month: int) -> List[tuple]:
+    return get_totals_by(expenses, year, month, "category")
 
 
-def get_monthly_totals(expenses: List[Expense], year: int, account: Optional[str] = None) -> List[float]:
+def get_monthly_totals(expenses: List[Expense], year: int) -> List[float]:
     """Twelve monthly totals for `year`, January first."""
-    return [get_total_for_month(expenses, year, month, account) for month in range(1, 13)]
+    return [get_total_for_month(expenses, year, month) for month in range(1, 13)]
 
 
-def get_paid_expense_ids(data_file: Path, year: int, month: int, account: Optional[str] = None) -> Set[str]:
+def get_paid_expense_ids(data_file: Path, year: int, month: int) -> Set[str]:
     if data_file.suffix.lower() == ".json":
         return set()
 
     if not data_file.exists():
         return set()
 
-    if account and account != "All accounts":
-        query = """
-            SELECT p.expense_id
-            FROM expense_payments p
-            JOIN expenses e ON e.id = p.expense_id
-            WHERE p.paid_year = ? AND p.paid_month = ? AND e.account = ?
-        """
-        params = (year, month, account)
-    else:
-        query = "SELECT expense_id FROM expense_payments WHERE paid_year = ? AND paid_month = ?"
-        params = (year, month)
-
+    query = "SELECT expense_id FROM expense_payments WHERE paid_year = ? AND paid_month = ?"
     with _connect(data_file) as connection:
-        rows = connection.execute(query, params).fetchall()
+        rows = connection.execute(query, (year, month)).fetchall()
     return {row[0] for row in rows}
 
 
 def get_paid_total_for_month(
-    expenses: List[Expense], paid_expense_ids: Set[str], year: int, month: int, account: Optional[str] = None
+    expenses: List[Expense], paid_expense_ids: Set[str], year: int, month: int
 ) -> float:
     total = 0.0
-    for expense in get_expenses_for_month(expenses, year, month, account):
+    for expense in get_expenses_for_month(expenses, year, month):
         if expense.amount is not None and expense.id in paid_expense_ids:
             total += expense.amount * len(occurrences_in_month(expense, year, month))
     return round(total, 2)
@@ -715,33 +701,29 @@ def set_expense_paid(data_file: Path, expense_id: str, year: int, month: int, pa
             )
 
 
-def get_expenses_for_day(
-    expenses: List[Expense], day: date, account: Optional[str] = None
-) -> List[Expense]:
+def get_expenses_for_day(expenses: List[Expense], day: date) -> List[Expense]:
     unique_by_id: dict[str, Expense] = {}
     for expense in expenses:
-        if account and account != "All accounts" and expense.account != account:
-            continue
         if occurs_on(expense, day):
             unique_by_id[expense.id] = expense
 
-    return sorted(unique_by_id.values(), key=lambda item: (item.account, item.description.lower()))
+    return sorted(unique_by_id.values(), key=lambda item: item.description.lower())
 
 
-def get_expenses_by_day(expenses: List[Expense], year: int, month: int, account: Optional[str] = None) -> dict[str, List[Expense]]:
+def get_expenses_by_day(expenses: List[Expense], year: int, month: int) -> dict[str, List[Expense]]:
     by_day: dict[str, List[Expense]] = {}
-    for expense in get_expenses_for_month(expenses, year, month, account):
+    for expense in get_expenses_for_month(expenses, year, month):
         for occurrence in occurrences_in_month(expense, year, month):
             by_day.setdefault(occurrence.isoformat(), []).append(expense)
     return by_day
 
 
-def get_upcoming(expenses: List[Expense], start: date, days: int = 7, account: Optional[str] = None) -> List[tuple]:
+def get_upcoming(expenses: List[Expense], start: date, days: int = 7) -> List[tuple]:
     """Every billing date in the next `days` days, as (date, expense) pairs."""
     upcoming: List[tuple] = []
     for offset in range(days + 1):
         day = start + timedelta(days=offset)
-        for expense in get_expenses_for_day(expenses, day, account):
+        for expense in get_expenses_for_day(expenses, day):
             upcoming.append((day, expense))
     return upcoming
 

@@ -46,15 +46,14 @@ class ExpenseTrackerTests(unittest.TestCase):
         self.assertEqual(get_total_for_month(expenses, 2026, 8), 87.5)
         self.assertEqual(get_total_for_month(expenses, 2026, 9), 10.0)
 
-    def test_account_filter_only_returns_matching_expenses(self) -> None:
+    def test_every_expense_in_the_month_is_returned(self) -> None:
         expenses = [
             create_expense("Netflix", 15.0, "2026-08-10", "Main", "Subscription"),
-            create_expense("Water", 20.0, "2026-08-10", "Wife", "Utility"),
+            create_expense("Water", 20.0, "2026-08-10", "Main", "Utility"),
         ]
 
-        result = get_expenses_for_month(expenses, 2026, 8, account="Main")
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0].description, "Netflix")
+        result = get_expenses_for_month(expenses, 2026, 8)
+        self.assertEqual([item.description for item in result], ["Netflix", "Water"])
 
     def test_planned_expense_without_amount_appears_on_due_day(self) -> None:
         expenses = [
@@ -106,7 +105,6 @@ class ExpenseTrackerTests(unittest.TestCase):
             paid_expense_ids={expenses[0].id},
             year=2026,
             month=8,
-            account="Main",
         )
         self.assertEqual(paid_total, 12.0)
 
@@ -305,14 +303,6 @@ class CategoryAndTrendTests(unittest.TestCase):
         totals = dict(get_category_totals(self._sample(), 2026, 8))
         self.assertEqual(totals["Food"], 15.0)
 
-    def test_category_totals_respect_the_account_filter(self):
-        expenses = self._sample() + [
-            create_expense("Shared streaming", 99.0, "2026-01-01", "Spouse", "Streaming",
-                           cadence=CADENCE_MONTHLY, due_day=1),
-        ]
-        totals = dict(get_category_totals(expenses, 2026, 8, account="Spouse"))
-        self.assertEqual(totals, {"Streaming": 99.0})
-
     def test_expenses_without_an_amount_are_skipped(self):
         expenses = [create_expense("Planned", None, "2026-08-04", "Main", "Other")]
         self.assertEqual(get_category_totals(expenses, 2026, 8), [])
@@ -367,10 +357,6 @@ class GroupedTotalsTests(unittest.TestCase):
             create_expense("Notion", 12.0, "2026-01-18", "Business", "Software",
                            cadence=CADENCE_MONTHLY, due_day=18),
         ]
-
-    def test_grouping_by_account(self):
-        totals = dict(get_totals_by(self._sample(), 2026, 8, "account"))
-        self.assertEqual(totals, {"Business": 72.0, "Main": 10.0})
 
     def test_grouping_by_category_matches_the_named_helper(self):
         sample = self._sample()
