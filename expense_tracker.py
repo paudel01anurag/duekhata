@@ -922,6 +922,89 @@ def get_monthly_totals(expenses: List[Expense], year: int) -> List[float]:
     return [get_total_for_month(expenses, year, month) for month in range(1, 13)]
 
 
+# How many times a cadence bills in an average month. Weekly is 52/12 rather
+# than 4, because four weeks is not a month.
+MONTHLY_EQUIVALENT = {
+    CADENCE_WEEKLY: 52 / 12,
+    CADENCE_MONTHLY: 1.0,
+    CADENCE_QUARTERLY: 1 / 3,
+    CADENCE_YEARLY: 1 / 12,
+}
+
+# Cadences that do not fall due every month, and so make one month's total
+# jump. A one-off is included: it spikes a month exactly once.
+IRREGULAR_CADENCES = (CADENCE_ONCE, CADENCE_QUARTERLY, CADENCE_YEARLY)
+
+IRREGULAR_LABELS = {
+    CADENCE_ONCE: "one-off",
+    CADENCE_QUARTERLY: "quarterly",
+    CADENCE_YEARLY: "yearly",
+}
+
+
+def monthly_equivalent(expense: Expense) -> float:
+    """What one subscription costs in an average month.
+
+    A $70 yearly subscription is $5.83 a month by this measure. That is a
+    different question from what leaves the account in the month it bills,
+    which is $70 and is what get_total_for_month reports. Both are true; this
+    one answers "what do my subscriptions cost me to run".
+
+    A one-off has no monthly cost, because it is not a commitment that repeats.
+    """
+    if expense.amount is None:
+        return 0.0
+    factor = MONTHLY_EQUIVALENT.get(expense.cadence)
+    if factor is None:
+        return 0.0
+    return expense.amount * factor
+
+
+def is_still_running(expense: Expense, today: Optional[date] = None) -> bool:
+    """True unless the subscription has an end date that has already passed."""
+    if expense.cadence == CADENCE_ONCE:
+        return False
+    if not expense.ends_on:
+        return True
+    end = _parse_iso(expense.ends_on)
+    if end is None:
+        return True
+    return end >= (today or date.today())
+
+
+def get_monthly_run_rate(expenses: List[Expense], today: Optional[date] = None) -> float:
+    """What the subscriptions still running cost per month, on average.
+
+    Deliberately a run rate rather than the year's total divided by twelve:
+    dividing the year undercounts anything started recently, and changes every
+    time the calendar rolls over. This answers "from here on, what am I
+    committed to each month".
+    """
+    return round(
+        sum(monthly_equivalent(expense) for expense in expenses if is_still_running(expense, today)),
+        2,
+    )
+
+
+def get_irregular_total_for_month(expenses: List[Expense], year: int, month: int) -> tuple:
+    """The part of a month's total that will not be there every month.
+
+    Returns (amount, labels) so the interface can say *why* a month is high.
+    """
+    total = 0.0
+    kinds = set()
+    for expense in get_expenses_for_month(expenses, year, month):
+        if expense.amount is None or expense.cadence not in IRREGULAR_CADENCES:
+            continue
+        occurrences = len(occurrences_in_month(expense, year, month))
+        if not occurrences:
+            continue
+        total += expense.amount * occurrences
+        kinds.add(expense.cadence)
+    ordered = [IRREGULAR_LABELS[name] for name in IRREGULAR_CADENCES if name in kinds]
+    return round(total, 2), ordered
+
+
 def get_paid_expense_ids(data_file: Path, year: int, month: int) -> Set[str]:
     if data_file.suffix.lower() == ".json":
         return set()

@@ -41,6 +41,8 @@ from expense_tracker import (
     get_expenses_by_day,
     get_expenses_for_day,
     get_paid_expense_ids,
+    get_monthly_run_rate,
+    get_irregular_total_for_month,
     get_paid_total_for_month,
     get_total_for_month,
     load_expenses,
@@ -1400,18 +1402,29 @@ class ExpenseTrackerApp:
         width = max(self.stats_canvas.winfo_width(), 1)
         height = max(self.stats_canvas.winfo_height(), 1)
 
+        irregular_amount, irregular_kinds = getattr(self, "irregular_this_month", (0.0, []))
+        if irregular_amount:
+            note = "incl. $" + format(irregular_amount, ",.2f") + " " + " and ".join(irregular_kinds)
+        else:
+            note = ""
+
+        # Two questions, two numbers. "Projected" is what leaves the account
+        # this month; "average per month" is what the subscriptions cost to
+        # run. A month holding a yearly renewal is higher than average and
+        # says so rather than looking like a mistake.
         cards = [
-            ("PROJECTED THIS MONTH", self.stat_values["projected"], theme["text"]),
-            ("REMAINING", self.stat_values["remaining"], theme["accent"]),
-            ("PAID", self.stat_values["paid"], theme["positive"]),
-            (f"TOTAL IN {self.current_date.year}", self.stat_values["yearly"], theme["text_secondary"]),
+            ("PROJECTED THIS MONTH", self.stat_values["projected"], theme["text"], note),
+            ("AVERAGE PER MONTH", self.stat_values["run_rate"], theme["text_secondary"], "spread over the year"),
+            ("REMAINING", self.stat_values["remaining"], theme["accent"], ""),
+            ("PAID", self.stat_values["paid"], theme["positive"], ""),
+            (f"TOTAL IN {self.current_date.year}", self.stat_values["yearly"], theme["text_secondary"], ""),
         ]
         gap = SPACE_3
         card_width = (width - gap * (len(cards) - 1) - 2) // len(cards)
         top = 5
         bottom = height - 7
 
-        for index, (label, value, value_color) in enumerate(cards):
+        for index, (label, value, value_color, caption) in enumerate(cards):
             x1 = 1 + index * (card_width + gap)
             x2 = x1 + card_width
             draw_elevation(self.stats_canvas, x1, top, x2, bottom, RADIUS_CARD, theme["background"], theme["shadow"], level=1)
@@ -1435,12 +1448,21 @@ class ExpenseTrackerApp:
             )
             self.stats_canvas.create_text(
                 x1 + SPACE_4,
-                top + SPACE_4 + 17,
+                top + SPACE_4 + 15,
                 text=f"${value:,.2f}",
                 anchor="nw",
                 fill=value_color,
                 font=display_font(19),
             )
+            if caption:
+                self.stats_canvas.create_text(
+                    x1 + SPACE_4,
+                    top + SPACE_4 + 44,
+                    text=caption,
+                    anchor="nw",
+                    fill=theme["text_muted"],
+                    font=text_font(8),
+                )
 
     def _draw_day_summary_card(self) -> None:
         if not hasattr(self, "day_summary_canvas"):
@@ -2507,7 +2529,14 @@ class ExpenseTrackerApp:
             "remaining": remaining_total,
             "paid": paid_total,
             "yearly": get_yearly_total(self.expenses, self.current_date.year),
+            "run_rate": get_monthly_run_rate(self.expenses),
         }
+        # A month carrying yearly or one-off billing is genuinely higher than a
+        # normal month. Saying so where the number appears saves the reader
+        # wondering whether the total is wrong.
+        self.irregular_this_month = get_irregular_total_for_month(
+            self.expenses, self.current_date.year, self.current_date.month
+        )
 
         day_expenses = get_expenses_for_day(self.expenses, self.selected_date)
         day_total = sum(expense.amount or 0 for expense in day_expenses)

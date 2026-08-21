@@ -25,6 +25,10 @@ from expense_tracker import (
     get_total_for_month,
     get_upcoming,
     get_yearly_total,
+    get_monthly_run_rate,
+    get_irregular_total_for_month,
+    monthly_equivalent,
+    is_still_running,
     load_expenses,
     occurrences_in_month,
     occurs_on,
@@ -368,6 +372,100 @@ class GroupedTotalsTests(unittest.TestCase):
     def test_an_unknown_field_is_rejected(self):
         with self.assertRaises(ValueError):
             get_totals_by(self._sample(), 2026, 8, "colour")
+
+
+class RunRateTests(unittest.TestCase):
+    """What a subscription costs per month, as distinct from what it bills."""
+
+    def _yearly(self, amount=70.0, ends_on=None):
+        return create_expense("AAA", amount, "2026-08-14", "Main", "Insurance",
+                              cadence=CADENCE_YEARLY, due_day=14, ends_on=ends_on)
+
+    def test_a_yearly_subscription_is_a_twelfth_a_month(self) -> None:
+        self.assertAlmostEqual(monthly_equivalent(self._yearly()), 70 / 12, places=4)
+
+    def test_a_weekly_subscription_uses_fifty_two_weeks_not_four(self) -> None:
+        weekly = create_expense("Coffee", 3.0, "2026-01-05", "Main", "Food",
+                                cadence=CADENCE_WEEKLY, due_day=5)
+        # Four weeks a month would give 12.00, which understates the year by a month.
+        self.assertAlmostEqual(monthly_equivalent(weekly), 13.0, places=4)
+
+    def test_a_quarterly_subscription_is_a_third(self) -> None:
+        quarterly = create_expense("Tax", 90.0, "2026-01-10", "Main", "Other",
+                                   cadence=CADENCE_QUARTERLY, due_day=10)
+        self.assertAlmostEqual(monthly_equivalent(quarterly), 30.0, places=4)
+
+    def test_a_one_off_has_no_monthly_cost(self) -> None:
+        once = create_expense("Laptop", 900.0, "2026-03-02", "Main", "Other",
+                              cadence=CADENCE_ONCE, due_day=2)
+        self.assertEqual(monthly_equivalent(once), 0.0)
+
+    def test_an_expense_without_an_amount_contributes_nothing(self) -> None:
+        planned = create_expense("Planned", None, "2026-03-02", "Main", "Other",
+                                 cadence=CADENCE_MONTHLY, due_day=2)
+        self.assertEqual(monthly_equivalent(planned), 0.0)
+
+    def test_a_cancelled_subscription_leaves_the_run_rate(self) -> None:
+        ended = self._yearly(ends_on="2026-01-01")
+        running = create_expense("Netflix", 22.99, "2026-01-03", "Main", "Streaming",
+                                 cadence=CADENCE_MONTHLY, due_day=3)
+        rate = get_monthly_run_rate([ended, running], today=date(2026, 8, 1))
+        self.assertEqual(rate, 22.99)
+        self.assertFalse(is_still_running(ended, date(2026, 8, 1)))
+        self.assertTrue(is_still_running(ended, date(2025, 12, 1)))
+
+    def test_the_run_rate_adds_the_normalised_amounts(self) -> None:
+        expenses = [
+            create_expense("Netflix", 22.99, "2026-01-03", "Main", "Streaming",
+                           cadence=CADENCE_MONTHLY, due_day=3),
+            self._yearly(),
+        ]
+        self.assertAlmostEqual(get_monthly_run_rate(expenses), round(22.99 + 70 / 12, 2), places=2)
+
+    def test_the_run_rate_does_not_move_with_the_calendar(self) -> None:
+        """Unlike dividing the year's total, which changes every January."""
+        expenses = [self._yearly()]
+        january = get_monthly_run_rate(expenses, today=date(2026, 1, 5))
+        december = get_monthly_run_rate(expenses, today=date(2026, 12, 5))
+        self.assertEqual(january, december)
+
+
+class IrregularMonthTests(unittest.TestCase):
+    """Explaining why one month is higher than the rest."""
+
+    def _sample(self):
+        return [
+            create_expense("Netflix", 22.99, "2026-01-03", "Main", "Streaming",
+                           cadence=CADENCE_MONTHLY, due_day=3),
+            create_expense("AAA", 70.0, "2026-08-14", "Main", "Insurance",
+                           cadence=CADENCE_YEARLY, due_day=14),
+            create_expense("Domain", 18.0, "2026-08-20", "Main", "Software",
+                           cadence=CADENCE_YEARLY, due_day=20),
+        ]
+
+    def test_the_billing_month_reports_the_irregular_part(self) -> None:
+        amount, kinds = get_irregular_total_for_month(self._sample(), 2026, 8)
+        self.assertEqual(amount, 88.0)
+        self.assertEqual(kinds, ["yearly"])
+
+    def test_an_ordinary_month_reports_nothing(self) -> None:
+        self.assertEqual(get_irregular_total_for_month(self._sample(), 2026, 7), (0.0, []))
+
+    def test_a_monthly_subscription_is_never_irregular(self) -> None:
+        monthly = [create_expense("Netflix", 22.99, "2026-01-03", "Main", "Streaming",
+                                  cadence=CADENCE_MONTHLY, due_day=3)]
+        self.assertEqual(get_irregular_total_for_month(monthly, 2026, 8), (0.0, []))
+
+    def test_several_kinds_are_listed_in_a_stable_order(self) -> None:
+        expenses = self._sample() + [
+            create_expense("Laptop", 900.0, "2026-08-02", "Main", "Other",
+                           cadence=CADENCE_ONCE, due_day=2),
+            create_expense("Tax", 90.0, "2026-08-10", "Main", "Other",
+                           cadence=CADENCE_QUARTERLY, due_day=10),
+        ]
+        amount, kinds = get_irregular_total_for_month(expenses, 2026, 8)
+        self.assertEqual(amount, 1078.0)
+        self.assertEqual(kinds, ["one-off", "quarterly", "yearly"])
 
 
 if __name__ == "__main__":
