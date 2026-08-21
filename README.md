@@ -10,9 +10,12 @@ shows what is due, what has been paid, and what is still to leave your account t
 > **Do not use the green `Code` button at the top of this page.** That gives you the source code,
 > which needs Python installed to do anything. The link above gives you the application itself.
 
-**Nothing to install.** Take the ZIP under *Assets*, extract it, and double-click `DueKhata.exe`.
-Everything the application needs is already inside that file — Python included — so it runs on a
-computer that has never had Python on it. Deleting the file removes it completely.
+**Nothing to install.** Under *Assets*, take **`DueKhata.exe`** and double-click it. Everything the
+application needs is already inside that one file — Python included — so it runs on a computer that
+has never had Python on it. Deleting the file removes it completely.
+
+There is a ZIP there too, holding the same executable plus installation notes, if you would rather
+have those.
 
 Windows shows a blue **"Windows protected your PC"** box the first time. Click **More info**, then
 **Run anyway**. That happens because the file is not signed with a paid certificate, not because

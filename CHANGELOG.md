@@ -3,6 +3,49 @@
 What changed in each version. Newest first. Every version can be downloaded from the
 [releases page](https://github.com/paudel01anurag/duekhata/releases).
 
+## v3.3.0 — 21 August 2026
+
+Credit cards get their own place, the dashboard stops making a yearly renewal look like a mistake,
+and accounts are gone.
+
+**Added**
+
+- **Cards.** Credit cards are tracked for their due date and for what was actually paid each month,
+  shown against the month before so you can see whether what you are paying down is going up or
+  coming down. Payments are entered a year at a time, so filling in what you have already paid this
+  year is one dialog rather than twelve prompts. A tile carries the total paid on cards this year.
+- **Average per month.** Beside what bills this month, the dashboard now shows what your
+  subscriptions cost per month on average — a yearly membership counts as a twelfth. A month made
+  high by yearly or one-off billing says so, so the figure no longer looks wrong.
+- Search and filter in the subscription list, by name, category or billing rhythm, with a count of
+  what is showing.
+- A wordmark in the sidebar.
+
+**Changed**
+
+- **Accounts have been removed.** The Main / Spouse / Shared filter went unused in practice: this
+  tracks one household's shared money, and splitting it by which account it came from invented a
+  distinction nobody felt. Nothing stored was deleted, and no existing entry needs changing.
+- **"Ends on" is a date picker** rather than a plain box that never said what format it wanted. It
+  stays blank until you tick *Ends on a date*.
+- Statistics can be drawn as a donut or as ranked bars.
+- Card payments are **never** counted as spending. Paying a card settles purchases that are already
+  recorded as subscriptions, so counting the payment would count the same money twice.
+
+**Fixed**
+
+- **Editing a subscription from the Subscriptions list crashed.** It has been broken since v3.0.0;
+  editing from the calendar worked, which is why it went unnoticed.
+- The calendar was squeezed. The day list beside it took width it had no use for while the calendar
+  starved. At 1680px a day cell went from 111px to 141px.
+- The STATUS column in the day list was clipped off the edge of the panel.
+- The Cards description kept a light background in dark mode.
+
+**Download**
+
+- The release now carries the executable on its own as well as the ZIP, so it can be run without
+  extracting anything first.
+
 ## v3.2.0 — 19 August 2026
 
 **Added**
