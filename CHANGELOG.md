@@ -1,7 +1,7 @@
 # Changelog
 
 What changed in each version. Newest first. Every version can be downloaded from the
-[releases page](https://github.com/paudel01anurag/duekhata/releases).
+[releases page](https://github.com/paudel01anurag/duekhata-subscription-tracker/releases).
 
 ## v3.3.0 — 21 August 2026
 

@@ -1,11 +1,14 @@
 # DueKhata
 
+[![tests](https://github.com/paudel01anurag/duekhata-subscription-tracker/actions/workflows/tests.yml/badge.svg)](https://github.com/paudel01anurag/duekhata-subscription-tracker/actions/workflows/tests.yml)
+[![licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](https://github.com/paudel01anurag/duekhata-subscription-tracker/blob/main/LICENSE)
+
 A Windows desktop application for keeping track of recurring subscriptions and monthly bills. It
 shows what is due, what has been paid, and what is still to leave your account this month.
 
 ## ⬇ Download the application
 
-### **[Get DueKhata for Windows](https://github.com/paudel01anurag/duekhata/releases/latest)**
+### **[Get DueKhata for Windows](https://github.com/paudel01anurag/duekhata-subscription-tracker/releases/latest)**
 
 > **Do not use the green `Code` button at the top of this page.** That gives you the source code,
 > which needs Python installed to do anything. The link above gives you the application itself.
@@ -124,9 +127,15 @@ A personal project shared openly, rather than a finished product.
 | `build_windows.ps1` | Builds the executable and the distributable ZIP |
 | `TESTERS.txt` | Installation notes, bundled into the ZIP as `READ ME FIRST.txt` |
 | `CHANGELOG.md` | What changed in each version |
+| `.github/workflows/` | Continuous integration: the unit tests on every push |
+| `LICENSE` | MIT |
+
+## Licence
+
+Released under the [MIT licence](LICENSE). Use it, learn from it, build on it.
 
 ## Version history
 
 See [CHANGELOG.md](CHANGELOG.md) for what changed in each version, and the
-[releases page](https://github.com/paudel01anurag/duekhata/releases) to download any
+[releases page](https://github.com/paudel01anurag/duekhata-subscription-tracker/releases) to download any
 earlier build.
